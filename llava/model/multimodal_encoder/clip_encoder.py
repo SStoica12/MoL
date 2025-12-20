@@ -1,8 +1,8 @@
 import torch
 import torch.nn as nn
 
-from transformers import CLIPVisionModel, CLIPImageProcessor, CLIPVisionConfig
-
+from transformers import CLIPVisionModel, CLIPImageProcessor, CLIPVisionConfig, CLIPModel
+from .modified_vision_tower import VisionTransformer, ModifiedResNet
 
 class CLIPVisionTower(nn.Module):
     def __init__(self, vision_tower, args, delay_load=False):
@@ -27,13 +27,51 @@ class CLIPVisionTower(nn.Module):
             return
 
         self.image_processor = CLIPImageProcessor.from_pretrained(self.vision_tower_name)
-        self.vision_tower = CLIPVisionModel.from_pretrained(self.vision_tower_name, device_map=device_map)
+        # self.vision_tower = CLIPVisionModel.from_pretrained(self.vision_tower_name, device_map=device_map)
+        
+        # ========================== prepare transformer ========================== #
+        vision = CLIPVisionModel.from_pretrained("openai/clip-vit-large-patch14-336")
+        cfg = vision.config
+
+        image_resolution = cfg.image_size
+        vision_patch_size = cfg.patch_size
+        vision_width = cfg.hidden_size
+        vision_layers = cfg.num_hidden_layers
+        vision_heads = cfg.num_attention_heads
+
+        clip = CLIPModel.from_pretrained("openai/clip-vit-large-patch14-336")
+        embed_dim = clip.config.projection_dim
+        if isinstance(vision_layers, (tuple, list)):
+            print("================================ WE ARE USING RESNET FOR VISUAL TOWER FOR CLIP ================================ ")
+            vision_heads = vision_width * 32 // 64
+            self.visual = ModifiedResNet(
+                layers=vision_layers,
+                output_dim=embed_dim,
+                heads=vision_heads,
+                input_resolution=image_resolution,
+                width=vision_width
+            )
+        else:
+            print("================================ WE ARE USING VISUAL TRANSFORMER FOR VISUAL TOWER FOR CLIP ================================ ")
+            vision_heads = vision_width // 64
+            self.visual = VisionTransformer(
+                input_resolution=image_resolution,
+                patch_size=vision_patch_size,
+                width=vision_width,
+                layers=vision_layers,
+                heads=vision_heads,
+                output_dim=embed_dim
+            )
         self.vision_tower.requires_grad_(False)
+        # unfreeze the learnable scaling params
+        for n, p in self.vision_tower.parameters():
+            if "scaling_coef" in n or "scaling_coeffs" in n:
+                p.requires_grad = True
 
         self.is_loaded = True
 
     def feature_select(self, image_forward_outs):
-        image_features = image_forward_outs.hidden_states[self.select_layer]
+        image_features = image_forward_outs.hidden_states[self.select_layer] # could we pass a list
         if self.select_feature == 'patch':
             image_features = image_features[:, 1:]
         elif self.select_feature == 'cls_patch':
@@ -116,8 +154,46 @@ class CLIPVisionTowerS2(CLIPVisionTower):
             return
 
         self.image_processor = CLIPImageProcessor.from_pretrained(self.vision_tower_name)
-        self.vision_tower = CLIPVisionModel.from_pretrained(self.vision_tower_name, device_map=device_map)
+        # self.vision_tower = CLIPVisionModel.from_pretrained(self.vision_tower_name, device_map=device_map)
+        
+        # ========================== prepare transformer ========================== #
+        vision = CLIPVisionModel.from_pretrained("openai/clip-vit-large-patch14-336")
+        cfg = vision.config
+
+        image_resolution = cfg.image_size
+        vision_patch_size = cfg.patch_size
+        vision_width = cfg.hidden_size
+        vision_layers = cfg.num_hidden_layers
+        vision_heads = cfg.num_attention_heads
+
+        clip = CLIPModel.from_pretrained("openai/clip-vit-large-patch14-336")
+        embed_dim = clip.config.projection_dim
+        if isinstance(vision_layers, (tuple, list)):
+            print("================================ WE ARE USING RESNET FOR VISUAL TOWER FOR CLIP ================================ ")
+            vision_heads = vision_width * 32 // 64
+            self.visual = ModifiedResNet(
+                layers=vision_layers,
+                output_dim=embed_dim,
+                heads=vision_heads,
+                input_resolution=image_resolution,
+                width=vision_width
+            )
+        else:
+            print("================================ WE ARE USING VISUAL TRANSFORMER FOR VISUAL TOWER FOR CLIP ================================ ")
+            vision_heads = vision_width // 64
+            self.visual = VisionTransformer(
+                input_resolution=image_resolution,
+                patch_size=vision_patch_size,
+                width=vision_width,
+                layers=vision_layers,
+                heads=vision_heads,
+                output_dim=embed_dim
+            )
+
         self.vision_tower.requires_grad_(False)
+        for n, p in self.vision_tower.parameters():
+            if "scaling_coef" in n or "scaling_coeffs" in n:
+                p.requires_grad = True
 
         self.image_processor.size['shortest_edge'] = self.s2_image_size
         self.image_processor.crop_size['height'] = self.image_processor.crop_size['width'] = self.s2_image_size
