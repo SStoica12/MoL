@@ -44,7 +44,7 @@ class CLIPVisionTower(nn.Module):
         if isinstance(vision_layers, (tuple, list)):
             print("================================ WE ARE USING RESNET FOR VISUAL TOWER FOR CLIP ================================ ")
             vision_heads = vision_width * 32 // 64
-            self.visual = ModifiedResNet(
+            self.vision_tower = ModifiedResNet(
                 layers=vision_layers,
                 output_dim=embed_dim,
                 heads=vision_heads,
@@ -54,7 +54,7 @@ class CLIPVisionTower(nn.Module):
         else:
             print("================================ WE ARE USING VISUAL TRANSFORMER FOR VISUAL TOWER FOR CLIP ================================ ")
             vision_heads = vision_width // 64
-            self.visual = VisionTransformer(
+            self.vision_tower = VisionTransformer(
                 input_resolution=image_resolution,
                 patch_size=vision_patch_size,
                 width=vision_width,
@@ -64,7 +64,7 @@ class CLIPVisionTower(nn.Module):
             )
         self.vision_tower.requires_grad_(False)
         # unfreeze the learnable scaling params
-        for n, p in self.vision_tower.parameters():
+        for n, p in self.vision_tower.named_parameters():
             if "scaling_coef" in n or "scaling_coeffs" in n:
                 p.requires_grad = True
 
@@ -171,7 +171,7 @@ class CLIPVisionTowerS2(CLIPVisionTower):
         if isinstance(vision_layers, (tuple, list)):
             print("================================ WE ARE USING RESNET FOR VISUAL TOWER FOR CLIP ================================ ")
             vision_heads = vision_width * 32 // 64
-            self.visual = ModifiedResNet(
+            self.vision_tower = ModifiedResNet(
                 layers=vision_layers,
                 output_dim=embed_dim,
                 heads=vision_heads,
@@ -181,7 +181,7 @@ class CLIPVisionTowerS2(CLIPVisionTower):
         else:
             print("================================ WE ARE USING VISUAL TRANSFORMER FOR VISUAL TOWER FOR CLIP ================================ ")
             vision_heads = vision_width // 64
-            self.visual = VisionTransformer(
+            self.vision_tower = VisionTransformer(
                 input_resolution=image_resolution,
                 patch_size=vision_patch_size,
                 width=vision_width,
@@ -191,7 +191,7 @@ class CLIPVisionTowerS2(CLIPVisionTower):
             )
 
         self.vision_tower.requires_grad_(False)
-        for n, p in self.vision_tower.parameters():
+        for n, p in self.vision_tower.named_parameters():
             if "scaling_coef" in n or "scaling_coeffs" in n:
                 p.requires_grad = True
 
