@@ -1,8 +1,103 @@
+import pdb
 import torch
 import torch.nn as nn
+from typing import Optional
+from transformers import CLIPVisionModel, CLIPImageProcessor, CLIPVisionConfig
+import sys
+import typing
+from typing import Any, TypeAlias, TypedDict, Union
+import typing_extensions
 
-from transformers import CLIPVisionModel, CLIPImageProcessor, CLIPVisionConfig, CLIPModel
-from .modified_vision_tower import VisionTransformer, ModifiedResNet
+# class ScaledResidualEncoderLayer(nn.Module):
+#    def __init__(self, layer):
+#        super().__init__()
+#        self.scaling_coef = nn.Parameter(torch.ones(1), requires_grad=True)
+#        self.layer = layer
+#    def forward(self, hidden_states: torch.Tensor, attention_mask: torch.Tensor, causal_attention_mask: torch.Tensor, output_attentions: Optional[bool] = False):
+#        output = self.layer(hidden_states, attention_mask, causal_attention_mask, output_attentions)
+#        # Scale the hidden states (output[0]) while preserving the output structure
+#        scaled_hidden_states = output[0] * self.scaling_coef
+#        if output_attentions and len(output) > 1:
+#            return (scaled_hidden_states,) + output[1:]
+#        else:
+#            return (scaled_hidden_states,)
+
+class TransformersKwargs(TypedDict, total=False):
+    """
+    Keyword arguments to be passed to the forward pass of a `PreTrainedModel`.
+
+    Attributes:
+        num_items_in_batch (`Optional[torch.Tensor]`, *optional*):
+            Number of items in the batch. It is recommended to pass it when you are doing gradient accumulation.
+        output_hidden_states (`Optional[bool]`, *optional*):
+            Most of the models support outputting all hidden states computed during the forward pass.
+        output_attentions (`Optional[bool]`, *optional*):
+            Turn this on to return the intermediary attention scores.
+        output_router_logits (`Optional[bool]`, *optional*):
+            For MoE models, this allows returning the router logits to compute the loss.
+        cu_seq_lens_q (`torch.LongTensor`, *optional*)
+            Gets cumulative sequence length for query state.
+        cu_seq_lens_k (`torch.LongTensor`, *optional*)
+            Gets cumulative sequence length for key state.
+        max_length_q (`int`, *optional*):
+            Maximum sequence length for query state.
+        max_length_k (`int`, *optional*):
+            Maximum sequence length for key state.
+        position_ids (`torch.LongTensor`, *optional*)
+            Indices of positions of each input sequence tokens.
+    """
+
+    num_items_in_batch: Optional["torch.Tensor"]
+    output_hidden_states: bool | None
+    output_attentions: bool | None
+    output_router_logits: bool | None
+    cu_seq_lens_q: Optional["torch.LongTensor"]
+    cu_seq_lens_k: Optional["torch.LongTensor"]
+    max_length_q: int | None
+    max_length_k: int | None
+    position_ids: Optional["torch.LongTensor"]
+
+if sys.version_info >= (3, 11):
+    Unpack = typing.Unpack
+else:
+    Unpack = typing_extensions.Unpack
+
+class ScaledResidualEncoderLayer(nn.Module):
+    def __init__(self, layer):
+        super().__init__()
+        self.scaling_coef = nn.Parameter(torch.ones(2), requires_grad=True)
+        self.layer = layer
+    def forward(
+        self,
+        hidden_states: torch.Tensor,
+        attention_mask: torch.Tensor,
+        causal_attention_mask: torch.Tensor, 
+        output_attentions: Optional[bool] = False,
+        **kwargs: Unpack[TransformersKwargs],
+    ) -> torch.FloatTensor:
+        residual = hidden_states
+        # print("===== entered ===== ")
+        hidden_states = self.layer.layer_norm1(hidden_states)
+        # print("===== done with layer norm 1 ===== ")
+        hidden_states, _ = self.layer.self_attn(
+            hidden_states=hidden_states,
+            attention_mask=attention_mask,
+            **kwargs,
+        )
+        # print("===== done with attention ===== ")
+        hidden_states = residual + self.scaling_coef[0] * hidden_states
+        # import pdb; pdb.set_trace()
+        # print("===== done with residual scaling 1 ===== ")
+        residual = hidden_states
+        hidden_states = self.layer.layer_norm2(hidden_states)
+        # print("===== done with layer norm 2 ===== ")
+        hidden_states = self.layer.mlp(hidden_states)
+        # print("===== done with mlp ===== ")
+        hidden_states = residual + self.scaling_coef[1] * hidden_states
+        # print("===== done with residual scaling 2 ===== ")
+        # print("hidden_states.shape: ", hidden_states.shape )
+        return (hidden_states, )
+
 
 class CLIPVisionTower(nn.Module):
     def __init__(self, vision_tower, args, delay_load=False):
@@ -27,51 +122,26 @@ class CLIPVisionTower(nn.Module):
             return
 
         self.image_processor = CLIPImageProcessor.from_pretrained(self.vision_tower_name)
-        # self.vision_tower = CLIPVisionModel.from_pretrained(self.vision_tower_name, device_map=device_map)
+        self.vision_tower = CLIPVisionModel.from_pretrained(self.vision_tower_name, device_map=device_map)
         
-        # ========================== prepare transformer ========================== #
-        vision = CLIPVisionModel.from_pretrained("openai/clip-vit-large-patch14-336")
-        cfg = vision.config
+        # Replace layers BEFORE freezing to ensure new parameters are properly registered
+        layers = self.vision_tower.vision_model.encoder.layers
+        for i in range(len(layers)):
+            layer = layers[i]
+            self.vision_tower.vision_model.encoder.layers[i] = ScaledResidualEncoderLayer(layer)
 
-        image_resolution = cfg.image_size
-        vision_patch_size = cfg.patch_size
-        vision_width = cfg.hidden_size
-        vision_layers = cfg.num_hidden_layers
-        vision_heads = cfg.num_attention_heads
-
-        clip = CLIPModel.from_pretrained("openai/clip-vit-large-patch14-336")
-        embed_dim = clip.config.projection_dim
-        if isinstance(vision_layers, (tuple, list)):
-            print("================================ WE ARE USING RESNET FOR VISUAL TOWER FOR CLIP ================================ ")
-            vision_heads = vision_width * 32 // 64
-            self.vision_tower = ModifiedResNet(
-                layers=vision_layers,
-                output_dim=embed_dim,
-                heads=vision_heads,
-                input_resolution=image_resolution,
-                width=vision_width
-            )
-        else:
-            print("================================ WE ARE USING VISUAL TRANSFORMER FOR VISUAL TOWER FOR CLIP ================================ ")
-            vision_heads = vision_width // 64
-            self.vision_tower = VisionTransformer(
-                input_resolution=image_resolution,
-                patch_size=vision_patch_size,
-                width=vision_width,
-                layers=vision_layers,
-                heads=vision_heads,
-                output_dim=embed_dim
-            )
+        # Now freeze the vision_tower (this will freeze all parameters)
         self.vision_tower.requires_grad_(False)
-        # unfreeze the learnable scaling params
+
+        # Then explicitly enable gradients for scaling_coef parameters
         for n, p in self.vision_tower.named_parameters():
-            if "scaling_coef" in n or "scaling_coeffs" in n:
+            if "scaling_coef" in n:
                 p.requires_grad = True
 
         self.is_loaded = True
 
     def feature_select(self, image_forward_outs):
-        image_features = image_forward_outs.hidden_states[self.select_layer] # could we pass a list
+        image_features = image_forward_outs.hidden_states[self.select_layer]
         if self.select_feature == 'patch':
             image_features = image_features[:, 1:]
         elif self.select_feature == 'cls_patch':
@@ -80,10 +150,14 @@ class CLIPVisionTower(nn.Module):
             raise ValueError(f'Unexpected select feature: {self.select_feature}')
         return image_features
 
-    @torch.no_grad()
+    # @torch.no_grad()
     def forward(self, images):
+        # pdb.set_trace()
+        # print("grad_enabled in CLIPVisionTower.forward =", torch.is_grad_enabled())
         if type(images) is list:
             image_features = []
+            # x = images.to(device=self.device, dtype=self.dtype)
+            # x = x.detach().requires_grad_(True)  # <-- only makes IMAGE tensor require grad
             for image in images:
                 image_forward_out = self.vision_tower(image.to(device=self.device, dtype=self.dtype).unsqueeze(0), output_hidden_states=True)
                 image_feature = self.feature_select(image_forward_out).to(image.dtype)
@@ -91,7 +165,7 @@ class CLIPVisionTower(nn.Module):
         else:
             image_forward_outs = self.vision_tower(images.to(device=self.device, dtype=self.dtype), output_hidden_states=True)
             image_features = self.feature_select(image_forward_outs).to(images.dtype)
-
+        # pdb.set_trace() # placed pdb here to find where the project was getting called -- press u multiple times
         return image_features
 
     @property
@@ -154,45 +228,20 @@ class CLIPVisionTowerS2(CLIPVisionTower):
             return
 
         self.image_processor = CLIPImageProcessor.from_pretrained(self.vision_tower_name)
-        # self.vision_tower = CLIPVisionModel.from_pretrained(self.vision_tower_name, device_map=device_map)
+        self.vision_tower = CLIPVisionModel.from_pretrained(self.vision_tower_name, device_map=device_map)
         
-        # ========================== prepare transformer ========================== #
-        vision = CLIPVisionModel.from_pretrained("openai/clip-vit-large-patch14-336")
-        cfg = vision.config
+        # Replace layers BEFORE freezing to ensure new parameters are properly registered
+        layers = self.vision_tower.vision_model.encoder.layers
+        for i in range(len(layers)):
+            layer = layers[i]
+            self.vision_tower.vision_model.encoder.layers[i] = ScaledResidualEncoderLayer(layer)
 
-        image_resolution = cfg.image_size
-        vision_patch_size = cfg.patch_size
-        vision_width = cfg.hidden_size
-        vision_layers = cfg.num_hidden_layers
-        vision_heads = cfg.num_attention_heads
-
-        clip = CLIPModel.from_pretrained("openai/clip-vit-large-patch14-336")
-        embed_dim = clip.config.projection_dim
-        if isinstance(vision_layers, (tuple, list)):
-            print("================================ WE ARE USING RESNET FOR VISUAL TOWER FOR CLIP ================================ ")
-            vision_heads = vision_width * 32 // 64
-            self.vision_tower = ModifiedResNet(
-                layers=vision_layers,
-                output_dim=embed_dim,
-                heads=vision_heads,
-                input_resolution=image_resolution,
-                width=vision_width
-            )
-        else:
-            print("================================ WE ARE USING VISUAL TRANSFORMER FOR VISUAL TOWER FOR CLIP ================================ ")
-            vision_heads = vision_width // 64
-            self.vision_tower = VisionTransformer(
-                input_resolution=image_resolution,
-                patch_size=vision_patch_size,
-                width=vision_width,
-                layers=vision_layers,
-                heads=vision_heads,
-                output_dim=embed_dim
-            )
-
+        # Now freeze the vision_tower (this will freeze all parameters)
         self.vision_tower.requires_grad_(False)
+
+        # Then explicitly enable gradients for scaling_coef parameters
         for n, p in self.vision_tower.named_parameters():
-            if "scaling_coef" in n or "scaling_coeffs" in n:
+            if "scaling_coef" in n:
                 p.requires_grad = True
 
         self.image_processor.size['shortest_edge'] = self.s2_image_size
@@ -200,13 +249,13 @@ class CLIPVisionTowerS2(CLIPVisionTower):
 
         self.is_loaded = True
 
-    @torch.no_grad()
+    # @torch.no_grad()
     def forward_feature(self, images):
         image_forward_outs = self.vision_tower(images.to(device=self.device, dtype=self.dtype), output_hidden_states=True)
         image_features = self.feature_select(image_forward_outs).to(images.dtype)
         return image_features
 
-    @torch.no_grad()
+    # @torch.no_grad()
     def forward(self, images):
         if type(images) is list:
             image_features = []
