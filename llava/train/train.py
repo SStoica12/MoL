@@ -13,7 +13,7 @@
 #    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 #    See the License for the specific language governing permissions and
 #    limitations under the License.
-
+import pdb
 import os
 import copy
 from dataclasses import dataclass, field
@@ -56,9 +56,10 @@ class ModelArguments:
     version: Optional[str] = field(default="v0")
     freeze_backbone: bool = field(default=False)
     tune_mm_mlp_adapter: bool = field(default=False)
+    tune_residual_scaling_coef: bool = field(default=False)
     vision_tower: Optional[str] = field(default=None)
     mm_vision_select_layer: Optional[int] = field(default=-1)   # default to the last layer
-    pretrain_mm_mlp_adapter: Optional[str] = field(default=None)
+    pretrain_mm_mlp_adapter: Optional[str] = field(default=None) # will include scaling coefs
     mm_projector_type: Optional[str] = field(default='linear')
     mm_use_im_start_end: bool = field(default=False)
     mm_use_im_patch_token: bool = field(default=True)
@@ -82,6 +83,7 @@ class TrainingArguments(transformers.TrainingArguments):
     optim: str = field(default="adamw_torch")
     remove_unused_columns: bool = field(default=False)
     freeze_mm_mlp_adapter: bool = field(default=False)
+    freeze_residual_scaling_coef: bool = field(default=False)
     mpt_attn_impl: Optional[str] = field(default="triton")
     model_max_length: int = field(
         default=512,
@@ -187,10 +189,13 @@ def safe_save_model_for_hf_trainer(trainer: transformers.Trainer,
     """Collects the state dict and dump to disk."""
 
     if getattr(trainer.args, "tune_mm_mlp_adapter", False):
-        # Only save Adapter
-        keys_to_match = ['mm_projector']
+        # Only save Adapter and scaling coefs
+        keys_to_match = ['mm_projector', 'scaling_coef']
         if getattr(trainer.args, "use_im_start_end", False):
             keys_to_match.extend(['embed_tokens', 'embed_in'])
+        # save also residuals if being trained
+        #if getattr(trainer.args, "tune_residual_scaling_coef", False):
+        # keys_to_match.extend(['scaling_coef'])
 
         weight_to_save = get_mm_adapter_state_maybe_zero_3(trainer.model.named_parameters(), keys_to_match)
         trainer.model.config.save_pretrained(output_dir)
@@ -254,7 +259,7 @@ def _tokenize_fn(strings: Sequence[str],
             text,
             return_tensors="pt",
             padding="longest",
-            max_length=tokenizer.model_max_length,
+            max_length=tokenizer.mzdel_max_length,
             truncation=True,
         ) for text in strings
     ]
@@ -850,13 +855,14 @@ def train(attn_implementation=None):
         model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=training_args.gradient_checkpointing)
 
     if training_args.gradient_checkpointing:
+        # pdb.set_trace()
         if hasattr(model, "enable_input_require_grads"):
             model.enable_input_require_grads()
         else:
             def make_inputs_require_grad(module, input, output):
                 output.requires_grad_(True)
             model.get_input_embeddings().register_forward_hook(make_inputs_require_grad)
-
+    model.to(device=training_args.device)
     if training_args.lora_enable:
         from peft import LoraConfig, get_peft_model
         lora_config = LoraConfig(
@@ -908,6 +914,7 @@ def train(attn_implementation=None):
             conversation_lib.default_conversation = conversation_lib.conv_templates["vicuna_v1"]
 
     if model_args.vision_tower is not None:
+        # pdb.set_trace()
         model.get_model().initialize_vision_modules(
             model_args=model_args,
             fsdp=training_args.fsdp
@@ -915,7 +922,23 @@ def train(attn_implementation=None):
         
         vision_tower = model.get_vision_tower()
         vision_tower.to(dtype=torch.bfloat16 if training_args.bf16 else torch.float16, device=training_args.device)
+        # print("vision tower: ", vision_tower)
+        # vision_tower.vision_tower.vision_model.encoder.gradient_checkpointing = False
+        # if hasattr(vision_tower, "gradient_checkpointing_disable"):
+        #     vision_tower.gradient_checkpointing_disable()
 
+        # # Also slam the common flags (harmless if already False)
+        # if hasattr(vision_tower, "vision_model") and hasattr(vision_tower.vision_model, "encoder"):
+        #     vision_tower.vision_tower.vision_model.encoder.gradient_checkpointing = False
+        # if hasattr(vision_tower, "vision_model"):
+        #     vision_tower.vision_tower.vision_model.gradient_checkpointing = False
+        # if hasattr(vision_tower, "gradient_checkpointing"):
+        #     vision_tower.vision_tower.gradient_checkpointing = False
+
+        # print("VT ckpt flags:",
+        #     getattr(vision_tower, "gradient_checkpointing", None),
+        #     getattr(vision_tower.vision_tower.vision_model, "gradient_checkpointing", None),
+        #     getattr(vision_tower.vision_tower.vision_model.encoder, "gradient_checkpointing", None))
         data_args.image_processor = vision_tower.image_processor
         data_args.is_multimodal = True
 
@@ -924,15 +947,27 @@ def train(attn_implementation=None):
         model.config.tokenizer_model_max_length = tokenizer.model_max_length
 
         model.config.tune_mm_mlp_adapter = training_args.tune_mm_mlp_adapter = model_args.tune_mm_mlp_adapter
+        model.config.tune_residual_scaling_coef = training_args.tune_residual_scaling_coef = model_args.tune_residual_scaling_coef
         if model_args.tune_mm_mlp_adapter:
             model.requires_grad_(False)
             for p in model.get_model().mm_projector.parameters():
                 p.requires_grad = True
 
+        if model_args.tune_residual_scaling_coef:
+            for n, p in vision_tower.named_parameters():
+                if "scaling_coef" in n:
+                    p.requires_grad = True
+
         model.config.freeze_mm_mlp_adapter = training_args.freeze_mm_mlp_adapter
+        model.config.freeze_residual_scaling_coef = training_args.freeze_residual_scaling_coef
+        # import pdb; pdb.set_trace()
         if training_args.freeze_mm_mlp_adapter:
             for p in model.get_model().mm_projector.parameters():
                 p.requires_grad = False
+        if training_args.freeze_residual_scaling_coef:
+            for n, p in vision_tower.named_parameters():
+                if "scaling_coef" in n:
+                    p.requires_grad = False
 
         if training_args.bits in [4, 8]:
             model.get_model().mm_projector.to(dtype=compute_dtype, device=training_args.device)
@@ -942,6 +977,17 @@ def train(attn_implementation=None):
         training_args.use_im_start_end = model_args.mm_use_im_start_end
         model.config.mm_use_im_patch_token = model_args.mm_use_im_patch_token
         model.initialize_vision_tokenizer(model_args, tokenizer=tokenizer)
+
+        if training_args.gradient_checkpointing: # this was needed because the vision model did not have inputs require True, resulting in no gradients being passed through the model
+            # pdb.set_trace()
+            if hasattr(vision_tower, "enable_input_require_grads"):
+                vision_tower.enable_input_require_grads()
+            else:
+                def make_inputs_require_grad(module, input, output):
+                    output.requires_grad_(True)
+                vision_tower.vision_tower.vision_model.embeddings.register_forward_hook(make_inputs_require_grad)
+
+        
 
     if training_args.bits in [4, 8]:
         from peft.tuners.lora import LoraLayer
@@ -962,7 +1008,10 @@ def train(attn_implementation=None):
                     tokenizer=tokenizer,
                     args=training_args,
                     **data_module)
-
+    
+    # print("TRAINABLE SCALARS:",
+    #   [n for n,p in model.named_parameters() if "scaling_coef" in n and p.requires_grad])
+    # import sys; sys.exit(0)
     if list(pathlib.Path(training_args.output_dir).glob("checkpoint-*")):
         trainer.train(resume_from_checkpoint=True)
     else:
