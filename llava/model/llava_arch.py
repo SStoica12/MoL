@@ -32,7 +32,7 @@ class LlavaMetaModel:
         super(LlavaMetaModel, self).__init__(config)
 
         if hasattr(config, "mm_vision_tower"):
-            self.vision_tower = build_vision_tower(config, delay_load=True)
+            self.vision_tower = build_vision_tower(config, delay_load=True) # this will include scaling_coefs
             self.mm_projector = build_vision_projector(config)
 
             if 'unpad' in getattr(config, 'mm_patch_merge_type', ''):
@@ -88,14 +88,28 @@ class LlavaMetaModel:
             # In case it is frozen by LoRA
             for p in self.mm_projector.parameters():
                 p.requires_grad = True
+            # infreeze also the scaling coefs if needed
+            for n, p in vision_tower.named_parameters():
+                if "scaling_coef" in n:
+                    p.requires_grad = False
 
         if pretrain_mm_mlp_adapter is not None:
-            mm_projector_weights = torch.load(pretrain_mm_mlp_adapter, map_location='cpu')
+            weights = torch.load(pretrain_mm_mlp_adapter, map_location='cpu')
             def get_w(weights, keyword):
                 return {k.split(keyword + '.')[1]: v for k, v in weights.items() if keyword in k}
+            def get_coefs(weights):
+                return {k:v for k,v in weights.items() if 'scaling_coef' in k}
 
-            self.mm_projector.load_state_dict(get_w(mm_projector_weights, 'mm_projector'))
+            self.mm_projector.load_state_dict(get_w(weights, 'mm_projector'))
 
+            # update scaling_coef values
+            scaling_coefs = get_coefs(weights)
+            layers = vision_tower.vision_tower.vision_model.encoder.layers
+            for i in range(len(layers)):
+                with torch.no_grad(): # replacement needs to be done under no grad
+                    vision_tower.vision_tower.vision_model.encoder.layers[i].scaling_coef.copy_(scaling_coefs[f'model.vision_tower.vision_tower.vision_model.encoder.layers.{i}.scaling_coef'])
+            # import pdb; pdb.set_trace()
+            print("============= updated the mm_projector weights and biases and the scaling coefs =============")
 
 def unpad_image(tensor, original_size):
     """
@@ -138,8 +152,10 @@ class LlavaMetaForCausalLM(ABC):
         return self.get_model().get_vision_tower()
 
     def encode_images(self, images):
-        image_features = self.get_model().get_vision_tower()(images)
-        image_features = self.get_model().mm_projector(image_features)
+        image_features = self.get_model().get_vision_tower()(images) # image_features.requires_grad = False <-- this is why gradients are zero for scaling coefs
+        assert image_features.requires_grad == True
+        # import pdb; pdb.set_trace()
+        image_features = self.get_model().mm_projector(image_features) # image_features.requires_grad = True
         return image_features
 
     def prepare_inputs_labels_for_multimodal(
