@@ -162,9 +162,12 @@ class LLaVATrainer(Trainer):
         if self.optimizer is None:
             decay_parameters = get_parameter_names(opt_model, ALL_LAYERNORM_LAYERS)
             decay_parameters = [name for name in decay_parameters if "bias" not in name and "scaling" not in name]
-            scalar_parameters = [n for n, _ in opt_model.named_parameters() if "scaling" in n]
-            
+            scalar_parameters = [n for n, p in opt_model.named_parameters() if "scaling" in n and p.requires_grad]
+            # print("===============================")
+            # print(scalar_parameters)
+            # print("===============================")
             if self.args.mm_projector_lr is not None:
+                # print("=============== je suis ici ===============")
                 projector_parameters = [name for name, _ in opt_model.named_parameters() if "mm_projector" in name]
                 optimizer_grouped_parameters = [
                     # non-projector, non-scaling params with decay
@@ -234,11 +237,6 @@ class LLaVATrainer(Trainer):
                     },
                 ]
 
-            # ================================ checks ================================ #
-            print("Scaling trainable:", [(n, p.requires_grad) for n,p in opt_model.named_parameters() if "scaling" in n])
-
-            print("Scaling param groups:",[i for i,g in enumerate(optimizer_grouped_parameters) if any("scaling" in n for n,p in opt_model.named_parameters() if p in g["params"])])
-            # ================================ checks ================================ # 
             optimizer_cls, optimizer_kwargs = Trainer.get_optimizer_cls_and_kwargs(self.args)
 
             self.optimizer = optimizer_cls(optimizer_grouped_parameters, **optimizer_kwargs)
@@ -278,7 +276,7 @@ class LLaVATrainer(Trainer):
                 torch.save(weight_to_save, os.path.join(output_dir, f'mm_projector.bin'))
         else:
             super(LLaVATrainer, self)._save_checkpoint(model, trial, metrics)
-
+    
     def _save(self, output_dir: Optional[str] = None, state_dict=None):
         if getattr(self.args, 'tune_mm_mlp_adapter', False):
             pass
