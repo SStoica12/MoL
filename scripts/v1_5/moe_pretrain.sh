@@ -15,7 +15,7 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 deepspeed llava/train/train_mem_router.py \
     --mm_use_im_start_end False \
     --mm_use_im_patch_token False \
     --bf16 True \
-    --output_dir /shared/nas/data/m1/sstoica2/LLaVA/checkpoints/llava-v1.5-13b-moe-pretrain \
+    --output_dir ./checkpoints/llava-v1.5-13b-moe-pretrain \
     --num_train_epochs 1 \
     --per_device_train_batch_size 32 \
     --per_device_eval_batch_size 4 \
