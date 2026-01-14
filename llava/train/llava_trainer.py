@@ -163,11 +163,7 @@ class LLaVATrainer(Trainer):
             decay_parameters = get_parameter_names(opt_model, ALL_LAYERNORM_LAYERS)
             decay_parameters = [name for name in decay_parameters if "bias" not in name and "scaling" not in name]
             scalar_parameters = [n for n, p in opt_model.named_parameters() if "scaling" in n and p.requires_grad]
-            # print("===============================")
-            # print(scalar_parameters)
-            # print("===============================")
             if self.args.mm_projector_lr is not None:
-                # print("=============== je suis ici ===============")
                 projector_parameters = [name for name, _ in opt_model.named_parameters() if "mm_projector" in name]
                 optimizer_grouped_parameters = [
                     # non-projector, non-scaling params with decay
@@ -283,7 +279,15 @@ class LLaVATrainer(Trainer):
         else:
             super(LLaVATrainer, self)._save(output_dir, state_dict) # problem here
 
+# =========================================================================== #
 class RouterLLaVATrainer(Trainer):
+    aux_losses = []
+    
+    def get_aux_losses_sep(self):
+        import json
+        with open("/shared/nas2/sstoica2/LLaVA/aux_loss.json", 'w') as f:
+            json.dump(self.aux_losses, f, indent=4)
+        return self.aux_losses
     
     def _get_train_sampler(self) -> Optional[torch.utils.data.Sampler]:
         if self.train_dataset is None or not has_length(self.train_dataset):
@@ -316,18 +320,17 @@ class RouterLLaVATrainer(Trainer):
             decay_parameters = get_parameter_names(opt_model, ALL_LAYERNORM_LAYERS)
             decay_parameters = [name for name in decay_parameters if "bias" not in name and "scaling" not in name]
             scalar_parameters = [n for n, p in opt_model.named_parameters() if "scaling" in n and p.requires_grad]
-            # print("===============================")
-            # print(scalar_parameters)
-            # print("===============================")
+            router_parameters = [n for n, p in opt_model.named_parameters() if "router" in n and p.requires_grad]
+
+            optimizer_grouped_parameters = []
             if self.args.mm_projector_lr is not None:
-                # print("=============== je suis ici ===============")
                 projector_parameters = [name for name, _ in opt_model.named_parameters() if "mm_projector" in name]
                 optimizer_grouped_parameters = [
                     # non-projector, non-scaling params with decay
                     {
                         "params": [
                             p for n, p in opt_model.named_parameters()
-                            if (n in decay_parameters and n not in projector_parameters and n not in scalar_parameters and p.requires_grad)
+                            if (n in decay_parameters and n not in projector_parameters and n not in scalar_parameters and n not in router_parameters and p.requires_grad)
                         ],
                         "weight_decay": self.args.weight_decay,
                     },
@@ -342,11 +345,11 @@ class RouterLLaVATrainer(Trainer):
                         "lr": self.args.mm_projector_lr * 0.1,  # optional
                     },
 
-                    # non-projector, non-scaling params without decay
+                    # non-projector, non-scaling, non-router params without decay
                     {
                         "params": [
                             p for n, p in opt_model.named_parameters()
-                            if (n not in decay_parameters and n not in projector_parameters and n not in scalar_parameters and p.requires_grad)
+                            if (n not in decay_parameters and n not in projector_parameters and n not in scalar_parameters and n not in router_parameters and p.requires_grad)
                         ],
                         "weight_decay": 0.0,
                     },
@@ -377,18 +380,47 @@ class RouterLLaVATrainer(Trainer):
                     {
                         "params": [
                             p for n, p in opt_model.named_parameters()
-                            if (n in decay_parameters and p.requires_grad)
+                            if (n in decay_parameters and n not in router_parameters and p.requires_grad)
                         ],
                         "weight_decay": self.args.weight_decay,
                     },
                     {
                         "params": [
                             p for n, p in opt_model.named_parameters()
-                            if (n not in decay_parameters and p.requires_grad)
+                            if (n not in decay_parameters and n not in router_parameters and p.requires_grad)
                         ],
                         "weight_decay": 0.0,
                     },
                 ]
+            if self.args.router_lr is not None:
+                optimizer_grouped_parameters.append(
+                    {
+                        "params": [
+                            p for n, p in opt_model.named_parameters()
+                            if (n in router_parameters and p.requires_grad)
+                        ],
+                        "weight_decay": 0.0,
+                        "lr": self.args.router_lr,
+                    },)
+            else:
+                optimizer_grouped_parameters.append(
+                    {
+                        "params": [
+                            p for n, p in opt_model.named_parameters()
+                            if (n in router_parameters and p.requires_grad)
+                        ],
+                        "weight_decay": 0.0,
+                    },)
+            print("TRAINABLE OPTIMIZER")
+            id2name = {id(p): n for n, p in opt_model.named_parameters()}
+            for gi, g in enumerate(optimizer_grouped_parameters):
+                lr = g.get("lr", self.args.learning_rate)
+                wd = g.get("weight_decay", 0.0)
+                print(f"\n=== group {gi}: lr={lr:.3e} wd={wd} ===")
+                for p in g["params"]:
+                    name = id2name.get(id(p), "<unknown>")
+                    print(" ", name)
+            # import sys; sys.exit(0)
             # all_group_params = set()
             # for group in optimizer_grouped_parameters:
             #     for p in group["params"]:
@@ -452,5 +484,6 @@ class RouterLLaVATrainer(Trainer):
         images = inputs.pop('images') # CHECK. I think it should exist because 'image' should be in instance[0] in /LLaVA/llava/train/train.py DataCollatorForSupervisedDataset
         # print("==================== progressing to get the aux_loss ====================")
         load_balance_loss = model.get_aux_loss(images)
+        self.aux_losses.append(load_balance_loss)
         loss += model.load_balance_alpha * load_balance_loss
         return (loss, outputs) if return_outputs else loss
