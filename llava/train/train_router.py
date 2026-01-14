@@ -956,6 +956,14 @@ def train(attn_implementation=None):
         model.router.num_layers_to_choose = model_args.num_layers_to_choose
         model.router.requires_grad_ = True # we need to learn the router
 
+        # replace zero weights with learned router weights
+        if model_args.pretrain_mm_mlp_adapter is not None:
+            weights = torch.load(model_args.pretrain_mm_mlp_adapter, map_location='cpu')
+            def get_w(weights, keyword):
+                return {k.split(keyword + '.')[1]: v for k, v in weights.items() if keyword in k}
+            model.router.load_state_dict(get_w(weights, 'router'))
+
+
         # # populate with weights and biases from the checkpoint
         # missing, unexpected = model.load_state_dict(model_base.state_dict(), strict=False)
         # # print(missing)
