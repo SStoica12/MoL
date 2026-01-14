@@ -103,7 +103,7 @@ class LlavaMetaModel:
             self.mm_projector.load_state_dict(get_w(weights, 'mm_projector'))
 
             # update scaling_coef values
-             scaling_coefs = get_coefs(weights)
+            scaling_coefs = get_coefs(weights)
             if len(scaling_coefs) != 0:
                 layers = vision_tower.vision_tower.vision_model.encoder.layers
                 for i in range(len(layers)):
