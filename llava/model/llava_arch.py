@@ -89,9 +89,9 @@ class LlavaMetaModel:
             for p in self.mm_projector.parameters():
                 p.requires_grad = True
             # infreeze also the scaling coefs if needed
-            for n, p in vision_tower.named_parameters():
-                if "scaling_coef" in n:
-                    p.requires_grad = False
+            # for n, p in vision_tower.named_parameters():
+            #     if "scaling_coef" in n:
+            #         p.requires_grad = False
 
         if pretrain_mm_mlp_adapter is not None:
             weights = torch.load(pretrain_mm_mlp_adapter, map_location='cpu')
