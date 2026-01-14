@@ -1,6 +1,6 @@
 #!/bin/bash
 
-CUDA_VISIBLE_DEVICES=0,1,2,3 deepspeed /shared/nas2/sstoica2/LLaVA/llava/train/train_mem_router.py \
+CUDA_VISIBLE_DEVICES=0,1,2,3 deepspeed llava/train/train_mem_router.py \
     --deepspeed ./scripts/zero2.json \
     --model_name_or_path lmsys/vicuna-13b-v1.5 \
     --version plain \
