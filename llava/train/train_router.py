@@ -175,7 +175,7 @@ def get_mm_adapter_state_maybe_zero_3(named_params, keys_to_match):
 def find_all_linear_names(model):
     cls = torch.nn.Linear
     lora_module_names = set()
-    multimodal_keywords = ['mm_projector', 'vision_tower', 'vision_resampler']
+    multimodal_keywords = ['mm_projector', 'vision_tower', 'vision_resampler', 'router']
     for name, module in model.named_modules():
         if any(mm_keyword in name for mm_keyword in multimodal_keywords):
             continue
@@ -194,14 +194,16 @@ def safe_save_model_for_hf_trainer(trainer: transformers.Trainer,
 
     if getattr(trainer.args, "tune_mm_mlp_adapter", False):
         print("=============== I AM IN KEYS TO MATCH ===============")
-        # Only save Adapter and scaling coefs
-        keys_to_match = ['mm_projector', 'scaling_coef']
+        # Only save Adapter and scaling router
+        keys_to_match = ['mm_projector', 'router']
+        if getattr(trainer.args, "tune_residual_scaling_coef", False):
+            keys_to_match.extend(['scaling_coef'])
         if getattr(trainer.args, "use_im_start_end", False):
             keys_to_match.extend(['embed_tokens', 'embed_in'])
         # save also residuals if being trained
         #if getattr(trainer.args, "tune_residual_scaling_coef", False):
         # keys_to_match.extend(['scaling_coef'])
-
+        print("keys to match: ", keys_to_match)
         weight_to_save = get_mm_adapter_state_maybe_zero_3(trainer.model.named_parameters(), keys_to_match)
         trainer.model.config.save_pretrained(output_dir)
 
@@ -843,8 +845,8 @@ def train(attn_implementation=None):
     # tokenizer, model_base, image_processor_base, context_len = get_base_model(model_args.model_name_or_path, None, load_in_4bit=training_args.bits == 4, load_in_8bit=training_args.bits == 8, device_map=training_args.device)
 
     if model_args.vision_tower is not None:
-        config = transformers.AutoConfig.from_pretrained(model_args.model_name_or_path, trust_remote_code=True)
         if 'mpt' in model_args.model_name_or_path:
+            config = transformers.AutoConfig.from_pretrained(model_args.model_name_or_path, trust_remote_code=True)
             config.attn_config['attn_impl'] = training_args.mpt_attn_impl
             model = RouterLlavaMptForCausalLM.from_pretrained(
                 model_args.model_name_or_path,
