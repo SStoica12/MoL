@@ -9,7 +9,7 @@ class Router(nn.Module):
         self.num_layers_to_choose = top_k
         self.config = config
         self.num_layers = None
-        self.vision_feature_select_strategy = "defualt" # 
+        self.vision_feature_select_strategy = "default" # 
         self.weights = nn.Parameter(weights) #[num_tokens, hidden_size]
         self.load_balancing_alpha = load_balancing_alpha
         # self.bias = nn.Parameter(torch.zeros(24)) # typically not used
