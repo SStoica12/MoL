@@ -843,8 +843,8 @@ def train(attn_implementation=None):
     # tokenizer, model_base, image_processor_base, context_len = get_base_model(model_args.model_name_or_path, None, load_in_4bit=training_args.bits == 4, load_in_8bit=training_args.bits == 8, device_map=training_args.device)
 
     if model_args.vision_tower is not None:
-        config = transformers.AutoConfig.from_pretrained(model_args.model_name_or_path, trust_remote_code=True)
         if 'mpt' in model_args.model_name_or_path:
+            config = transformers.AutoConfig.from_pretrained(model_args.model_name_or_path, trust_remote_code=True)
             config.attn_config['attn_impl'] = training_args.mpt_attn_impl
             model = RouterLlavaMptForCausalLM.from_pretrained(
                 model_args.model_name_or_path,
