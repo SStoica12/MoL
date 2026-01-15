@@ -31,17 +31,17 @@ class Router(nn.Module):
         assert self.num_layers is not None
         # print("expert_mask: ", expert_mask.dtype, expert_mask.shape)
         # print("router_probs: ", router_probs.dtype, router_probs.shape)
-        density_1 = torch.mean(expert_mask, dim=-1)
+        density_1 = torch.mean(expert_mask, dim=0)  # shape: [L]
         # For each core, get fraction of probability mass assigned to each expert
         # from the router across all tokens.
         # density 1 proxy shape: [num cores, num experts]
-        density_1_proxy = torch.mean(router_probs, dim=-1)
+        density_1_proxy = torch.mean(router_probs, dim=0)  # shape: [L]
         # density l for a single core: vector of length num experts that sums to 1.
         # density l proxy for a single core: vector of length num experts that sums to 1.
         # Want both vectors to have uniform allocation (1/num experts) across all num expert elements.
         # The two vectors will be pushed towards uniform allocation when the dot product is minimized.
         loss = torch.mean(density_1_proxy * density_1) * (self.num_layers**2)
-        return loss.item()
+        return loss
 
     def router_probs(self, hidden_states):
         # hidden states are of size:  torch.Size([num_layers, batch_size, num_tokens, hidden_size]).
@@ -56,7 +56,7 @@ class Router(nn.Module):
         # Convert input to softmax operation from bfloat16 to float32 for stability. <- do I need to do this?
         #router logits = mtf.to float32(router logits)
 
-        # TO DO: reshape to get num_layers in last dim
+        # TODO: reshape to get num_layers in last dim
         router_probs = torch.softmax(router_logits, dim=-1)
         # print("router_probs.shape: ", router_probs.shape)
         return router_probs # torch.Size([32, 24])
@@ -68,7 +68,10 @@ class Router(nn.Module):
         probs = sorted_probs[:, :self.num_layers_to_choose]
         layers = sorted_idxs[:, :self.num_layers_to_choose]
         last_layer_prob = router_probs[:, -1]
-        expert_mask = F.one_hot(layers, num_classes = self.num_layers).squeeze().float() # [batch_size, 1, num_layers] -> [batch_size, num_layers]
+        # build expert mask (top-k safe): [B, k, L] -> [B, L]
+        expert_mask = F.one_hot(layers, num_classes=self.num_layers).float().sum(dim=1)
+        # normalize so each row sums to 1 (important for top-k > 1) -> routing mass needs to be distributed to sum up to 1
+        expert_mask = expert_mask / expert_mask.sum(dim=-1, keepdim=True)
         # print("layers, probs, last_layer_prob, expert_mask: ", [x.shape for x in [layers, probs, last_layer_prob, expert_mask]])
         return layers, probs, last_layer_prob, expert_mask # [batch_size, num_layers_to_choose] x2, [batch_size, ], [batch_size, num_layers]
 
@@ -88,7 +91,7 @@ class Router(nn.Module):
         # use torch.gather to gather the indexes in layer to get image_features of shape [B, L, N, H]
         hidden_states = hidden_states.transpose(0, 1)
         layers = layers.reshape(B, -1, 1, 1).expand(B, k, N, H)      
-        hidden_states_chosen = torch.gather(hidden_states, 1, layers)   
+        hidden_states_chosen = torch.gather(hidden_states, 1, layers)
         last_hidden_state = hidden_states[:, -1, :, :].unsqueeze(1)
 
         image_interm_features = probs.reshape(B, -1, 1, 1) * hidden_states_chosen
