@@ -59,7 +59,7 @@ class Router(nn.Module):
     def get_layer_and_scaling_probs_and_expert_mask(self, router_probs):
         # the last dim in router probs is num_layers: 24
         # router_probs = [batch_size, num_layers]
-        sorted_probs, sorted_idxs = torch.sort(router_probs[:, :-1], dim=-1) # remove the last layer from consideration
+        sorted_probs, sorted_idxs = torch.sort(router_probs[:, :-1], dim=-1, descending=True) # remove the last layer from consideration
         probs = sorted_probs[:, :self.num_layers_to_choose]
         layers = sorted_idxs[:, :self.num_layers_to_choose]
         last_layer_prob = router_probs[:, -1]
