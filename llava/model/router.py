@@ -19,8 +19,13 @@ class Router(nn.Module):
     def load_balance_loss(self, router_probs, expert_mask):
         """Calculate load−balancing loss to ensure diverse expert routing. Taken from swift transformer pseudo code
         modified to hard code num_experts because we know it is 24, but can find it dynamically too easily.
-        Also, removed tensor_cores because we do not need to restrict input number of tokens to any expert """
-        # router probs is the probability assigned for each expert per token.
+        Also, removed tensor_cores because we do not need to restrict input number of tokens to any expert 
+        
+        Args:
+            router_probs: [batch_size, num_layers] - probability assigned to each expert per image
+            expert_mask: [batch_size, num_layers] - one-hot vector indicating which layer was actually selected
+        """
+        # router probs is the probability assigned for each expert per image.
         # expert mask contains the expert with the highest router probability in one−hot format.
         # router_probs and expert_mask = [batch_size, num_layers]
         assert self.num_layers is not None
