@@ -90,9 +90,9 @@ class LlavaMetaModel:
             for p in self.mm_projector.parameters():
                 p.requires_grad = True
             # infreeze also the scaling coefs if needed
-            for n, p in vision_tower.named_parameters():
-                if "scaling_coef" in n:
-                    p.requires_grad = False
+            # for n, p in vision_tower.named_parameters():
+            #     if "scaling_coef" in n:
+            #         p.requires_grad = False
 
         if pretrain_mm_mlp_adapter is not None:
             weights = torch.load(pretrain_mm_mlp_adapter, map_location='cpu')
@@ -105,10 +105,11 @@ class LlavaMetaModel:
 
             # update scaling_coef values
             scaling_coefs = get_coefs(weights)
-            layers = vision_tower.vision_tower.vision_model.encoder.layers
-            for i in range(len(layers)):
-                with torch.no_grad(): # replacement needs to be done under no grad
-                    vision_tower.vision_tower.vision_model.encoder.layers[i].scaling_coef.copy_(scaling_coefs[f'model.vision_tower.vision_tower.vision_model.encoder.layers.{i}.scaling_coef'])
+            if len(scaling_coefs) != 0:
+                layers = vision_tower.vision_tower.vision_model.encoder.layers
+                for i in range(len(layers)):
+                    with torch.no_grad(): # replacement needs to be done under no grad
+                        vision_tower.vision_tower.vision_model.encoder.layers[i].scaling_coef.copy_(scaling_coefs[f'model.vision_tower.vision_tower.vision_model.encoder.layers.{i}.scaling_coef'])
             # import pdb; pdb.set_trace()
             print("============= updated the mm_projector weights and biases and the scaling coefs =============")
 

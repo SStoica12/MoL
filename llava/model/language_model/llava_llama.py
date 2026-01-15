@@ -69,7 +69,9 @@ class LlavaLlamaForCausalLM(LlamaForCausalLM, LlavaMetaForCausalLM):
         image_sizes: Optional[List[List[int]]] = None,
         return_dict: Optional[bool] = None,
     ) -> Union[Tuple, CausalLMOutputWithPast]:
-
+        # print("==================== I entered this forward ====================")
+        # import sys; sys.exit(0)
+        # import pdb; pdb.set_trace()
         if inputs_embeds is None:
             (
                 input_ids,
@@ -87,7 +89,11 @@ class LlavaLlamaForCausalLM(LlamaForCausalLM, LlavaMetaForCausalLM):
                 images,
                 image_sizes
             )
-
+        # if torch.is_tensor(inputs_embeds):
+        #     print("inputs_embeds: ", inputs_embeds.shape)
+        # else:
+        #     print("inputs_embeds: ", [x.shape for x in inputs_embeds.shape])
+        # import sys; sys.exit()
         return super().forward(
             input_ids=input_ids,
             attention_mask=attention_mask,
@@ -154,5 +160,58 @@ class LlavaLlamaForCausalLM(LlamaForCausalLM, LlavaMetaForCausalLM):
             inputs['image_sizes'] = image_sizes
         return inputs
 
+class RouterLlavaLlamaForCausalLM(LlavaLlamaForCausalLM):
+    def __init__(self, config, router = None, load_balance_alpha=10**-2, type="llava"):
+        super().__init__(config)
+        self.router = router
+        self.load_balance_alpha = load_balance_alpha
+    def get_model(self):
+        return self.model
+    def encode_images(self, images):
+        print("--------- I AM IN ROUTER ENCODE IMAGES ---------")
+        vision_tower = self.get_model().get_vision_tower().vision_tower
+        device = vision_tower.device
+        dtype = vision_tower.dtype
+        if type(images) is list:
+            image_features = []
+            for image in images:
+                image_forward_outs = vision_tower(image.to(device=device, dtype=dtype).unsqueeze(0), output_hidden_states=True)
+        else:
+            image_forward_outs = vision_tower(images.to(device=device, dtype=dtype), output_hidden_states=True) # all 25 layers have  torch.Size([32, 577, 1024])
+
+        hidden_states = torch.stack(list(image_forward_outs.hidden_states)) # [num_layers, batch_size, num_image_tokens, vision_hidden_dim]
+        assert hidden_states.ndim == 4
+        image_features = self.router(hidden_states[1:, :, :, :]) # do not want to include the embedding layer
+        assert image_features.requires_grad == True
+        # import pdb; pdb.set_trace()
+        image_features = self.get_model().mm_projector(image_features) # image_features.requires_grad = True
+        # assert image_features.requires_grad == True
+        return image_features
+    
+    def get_router_probs_and_expert_mask(self, hidden_states):
+        hidden_states = torch.stack(list(hidden_states)) # [num_layers, batch_size, num_image_tokens, vision_hidden_dim]
+        router_probs = self.router.router_probs(hidden_states[1:, :, :, :]) # remove embedding
+        _, _, _, expert_mask = self.router.get_layer_and_scaling_probs_and_expert_mask(router_probs)
+        return router_probs, expert_mask
+    
+    def get_aux_loss(self, images):
+        # calculate the hidden states
+        vision_tower = self.get_model().get_vision_tower().vision_tower
+        device = vision_tower.device
+        dtype = vision_tower.dtype
+        losses = []
+        if type(images) is list:
+            losses = []
+            for image in images:
+                image_forward_outs = vision_tower(image.to(device=device, dtype=dtype), output_hidden_states=True) # all 25 layers have  torch.Size([32, 577, 1024])
+                router_probs, expert_mask = self.get_router_probs_and_expert_mask(image_forward_outs.hidden_states)
+                losses.append(self.router.load_balance_loss(router_probs, expert_mask))
+            loss = sum(losses) / len(losses)
+        else:
+            image_forward_outs = vision_tower(images.to(device=device, dtype=dtype), output_hidden_states=True) # all 25 layers have  torch.Size([32, 577, 1024])
+            router_probs, expert_mask = self.get_router_probs_and_expert_mask(image_forward_outs.hidden_states)
+            loss = self.router.load_balance_loss(router_probs, expert_mask)
+        return loss
+
 AutoConfig.register("llava_llama", LlavaConfig)
-AutoModelForCausalLM.register(LlavaConfig, LlavaLlamaForCausalLM)
+AutoModelForCausalLM.register(LlavaConfig, LlavaLlamaForCausalLM, RouterLlavaLlamaForCausalLM)
