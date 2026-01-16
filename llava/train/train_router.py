@@ -949,8 +949,8 @@ def train(attn_implementation=None):
         vision_tower = model.get_vision_tower()
         vision_tower.to(dtype=torch.bfloat16 if training_args.bf16 else torch.float16, device=training_args.device)
         
-        image_size = vision_tower.vision_tower.config.patch_size
-        patch_size = vision_tower.vision_tower.config.image_size
+        patch_size = vision_tower.vision_tower.config.patch_size
+        image_size = vision_tower.vision_tower.config.image_size
         hidden_size = vision_tower.vision_tower.config.hidden_size
         num_image_tokens = (image_size // patch_size)**2 + 1
         router_weights = torch.zeros((num_image_tokens, hidden_size)).to(dtype=torch.bfloat16 if training_args.bf16 else torch.float16, device=training_args.device)
