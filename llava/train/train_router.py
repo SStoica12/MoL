@@ -959,7 +959,7 @@ def train(attn_implementation=None):
         # print("model.config.mm_vision_select_feature: ", model.config.mm_vision_select_feature) # patch
         model.router = Router(model.config, router_weights, model.config.mm_vision_select_feature, training_args.load_balancing_alpha)
         model.router.num_layers_to_choose = model_args.num_layers_to_choose
-        model.router.requires_grad_ = True # we need to learn the router
+        model.router.requires_grad_(True) # we need to learn the router
 
         # replace zero weights with learned router weights
         if model_args.pretrain_mm_mlp_adapter is not None:
