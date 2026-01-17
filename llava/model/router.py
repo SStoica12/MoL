@@ -9,7 +9,7 @@ class Router(nn.Module):
         self.num_layers_to_choose = top_k
         self.config = config
         self.num_layers = None
-        self.vision_feature_select_strategy = "defualt" # 
+        self.vision_feature_select_strategy = "default" # 
         self.weights = nn.Parameter(weights) #[num_tokens, hidden_size]
         self.load_balancing_alpha = load_balancing_alpha
         # self.bias = nn.Parameter(torch.zeros(24)) # typically not used
@@ -66,7 +66,7 @@ class Router(nn.Module):
         #router logits = mtf.to float32(router logits)
 
         # TO DO: reshape to get num_layers in last dim
-        router_probs = torch.softmax(router_logits, dim=-1)
+        router_probs = torch.softmax(router_logits, dim=-1).to(router_logits.dtype)
         # print("router_probs.shape: ", router_probs.shape)
         return router_probs # torch.Size([batch_size, num_layers])
 
@@ -77,7 +77,7 @@ class Router(nn.Module):
         probs = sorted_probs[:, :self.num_layers_to_choose]
         layers = sorted_idxs[:, :self.num_layers_to_choose]
         last_layer_prob = router_probs[:, -1]
-        expert_mask = F.one_hot(layers, num_classes = self.num_layers).squeeze().float() # [batch_size, 1, num_layers] -> [batch_size, num_layers]
+        expert_mask = F.one_hot(layers, num_classes = self.num_layers).squeeze(1).float() # [batch_size, 1, num_layers] -> [batch_size, num_layers]
         if self.num_layers_to_choose  > 1:
             expert_mask = F.normalize(expert_mask, dim=-1)
         # print("layers, probs, last_layer_prob, expert_mask: ", [x.shape for x in [layers, probs, last_layer_prob, expert_mask]])
@@ -109,10 +109,10 @@ class Router(nn.Module):
         image_features = image_interm_features + last_layer_prob.reshape(B, -1, 1, 1) * last_hidden_state
 
         # print("image feature after aggregation: ", image_features.shape) # [B, 1, N, H]
-        image_feature = image_features.squeeze() # [B, N, H]
+        image_feature = image_features.squeeze(1) # [B, N, H]
         if self.vision_feature_select_strategy == "patch": 
-            image_feature = image_features[:, 1:, :]
+            image_feature = image_feature[:, 1:, :]
         if self.vision_feature_select_strategy == "cls": 
-            image_feature = image_features[:, 0, :]
+            image_feature = image_feature[:, 0, :]
         assert image_feature.ndim == 3
         return image_feature
