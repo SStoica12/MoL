@@ -874,7 +874,9 @@ def train(attn_implementation=None):
         )
 
     model.config.use_cache = False
-    model.requires_grad_(False) # freeze the LLM
+    if model_args.freeze_backbone:
+        model.model.requires_grad_(False)
+    # model.requires_grad_(False) # freeze the LLM
 
     if training_args.bits in [4, 8]:
         from peft import prepare_model_for_kbit_training
