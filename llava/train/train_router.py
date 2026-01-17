@@ -1028,7 +1028,7 @@ def train(attn_implementation=None):
         model.config.mm_use_im_patch_token = model_args.mm_use_im_patch_token
         model.initialize_vision_tokenizer(model_args, tokenizer=tokenizer)
 
-        if model_args.tune_residual_scaling_coef and training_args.gradient_checkpointing: # this was needed because the vision model did not have inputs require True, resulting in no gradients being passed through the model
+        if (model_args.tune_residual_scaling_coef or model_args.tune_encoder_layers) and training_args.gradient_checkpointing: # this was needed because the vision model did not have inputs require True, resulting in no gradients being passed through the model
             # pdb.set_trace()
             if hasattr(vision_tower, "enable_input_require_grads"):
                 vision_tower.enable_input_require_grads()
