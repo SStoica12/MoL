@@ -872,7 +872,9 @@ def train(attn_implementation=None):
         )
 
     model.config.use_cache = False
-    model.requires_grad_(False) # freeze the LLM
+    if model_args.freeze_backbone:
+        model.model.requires_grad_(False)
+    # model.requires_grad_(False) # freeze the LLM
 
     if training_args.bits in [4, 8]:
         from peft import prepare_model_for_kbit_training
@@ -947,15 +949,15 @@ def train(attn_implementation=None):
         vision_tower = model.get_vision_tower()
         vision_tower.to(dtype=torch.bfloat16 if training_args.bf16 else torch.float16, device=training_args.device)
         
-        patch_size = vision_tower.vision_tower.config.patch_size
         image_size = vision_tower.vision_tower.config.image_size
+        patch_size = vision_tower.vision_tower.config.patch_size
         hidden_size = vision_tower.vision_tower.config.hidden_size
         num_image_tokens = (image_size // patch_size)**2 + 1
         router_weights = torch.zeros((num_image_tokens, hidden_size)).to(dtype=torch.bfloat16 if training_args.bf16 else torch.float16, device=training_args.device)
         # print("model.config.mm_vision_select_feature: ", model.config.mm_vision_select_feature) # patch
         model.router = Router(model.config, router_weights, model.config.mm_vision_select_feature, training_args.load_balancing_alpha)
         model.router.num_layers_to_choose = model_args.num_layers_to_choose
-        model.router.requires_grad_ = True # we need to learn the router
+        model.router.requires_grad_(True) # we need to learn the router
 
         # replace zero weights with learned router weights
         if model_args.pretrain_mm_mlp_adapter is not None:
@@ -1024,7 +1026,7 @@ def train(attn_implementation=None):
         model.config.mm_use_im_patch_token = model_args.mm_use_im_patch_token
         model.initialize_vision_tokenizer(model_args, tokenizer=tokenizer)
 
-        if model_args.tune_residual_scaling_coef and training_args.gradient_checkpointing: # this was needed because the vision model did not have inputs require True, resulting in no gradients being passed through the model
+        if (model_args.tune_residual_scaling_coef or model_args.tune_encoder_layers) and training_args.gradient_checkpointing: # this was needed because the vision model did not have inputs require True, resulting in no gradients being passed through the model
             # pdb.set_trace()
             if hasattr(vision_tower, "enable_input_require_grads"):
                 vision_tower.enable_input_require_grads()
