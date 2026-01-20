@@ -2,7 +2,7 @@ import pdb
 import torch
 import torch.nn as nn
 from typing import Optional
-from transformers import CLIPVisionModel, CLIPImageProcessor, CLIPVisionConfig
+from transformers import CLIPVisionModel, CLIPImageProcessor, CLIPVisionConfig, CLIPTextModel, CLIPTokenizer
 import sys
 import typing
 from typing import Any, TypeAlias, TypedDict, Union
@@ -198,8 +198,34 @@ class CLIPVisionTower(nn.Module):
     @property
     def num_patches(self):
         return (self.config.image_size // self.config.patch_size) ** 2
+    
 
-
+class CLIPVisionTextTower(CLIPVisionTower):    
+    def __init__(self, vision_tower, args, delay_load=False):
+        self.text_tower = None
+        self.text_tokenizer = None
+        super().__init__(vision_tower, args, delay_load)
+        
+    def load_model(self, device_map=None):
+        super().load_model(device_map=device_map)
+        if self.text_tower is None:
+            self.text_tokenizer = CLIPTokenizer.from_pretrained(self.vision_tower_name)
+            self.text_tower = CLIPTextModel.from_pretrained(self.vision_tower_name, device_map=device_map)
+            self.text_tower.requires_grad_(False)
+    
+    def get_text_tower(self):  # NOTE: this will be used to return a handler to self.text_tower
+        if self.text_tower is None:
+            raise RuntimeError("Text tower not loaded. Please call load_model() first.")
+        return self.text_tower
+    
+    def encode_text(self, input_ids, attention_mask=None):
+        text_out = self.get_text_tower()(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            output_hidden_states=True,
+        )
+        return text_out.last_hidden_state
+    
 
 class CLIPVisionTowerS2(CLIPVisionTower):
     def __init__(self, vision_tower, args, delay_load=False):

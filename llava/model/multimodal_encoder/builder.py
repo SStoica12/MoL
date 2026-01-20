@@ -1,13 +1,16 @@
 import os
-from .clip_encoder import CLIPVisionTower, CLIPVisionTowerS2
+from .clip_encoder import CLIPVisionTextTower, CLIPVisionTower, CLIPVisionTowerS2
 
 
 def build_vision_tower(vision_tower_cfg, **kwargs):
     vision_tower = getattr(vision_tower_cfg, 'mm_vision_tower', getattr(vision_tower_cfg, 'vision_tower', None))
     is_absolute_path_exists = os.path.exists(vision_tower)
     use_s2 = getattr(vision_tower_cfg, 's2', False)
+    use_text_enc = getattr(vision_tower_cfg, "mm_use_text_enc", getattr(vision_tower_cfg, "use_text_enc", False))
     if is_absolute_path_exists or vision_tower.startswith("openai") or vision_tower.startswith("laion") or "ShareGPT4V" in vision_tower:
-        if use_s2:
+        if use_text_enc:
+            return CLIPVisionTextTower(vision_tower, args=vision_tower_cfg, **kwargs)
+        elif use_s2:
             return CLIPVisionTowerS2(vision_tower, args=vision_tower_cfg, **kwargs)
         else:
             return CLIPVisionTower(vision_tower, args=vision_tower_cfg, **kwargs)

@@ -54,6 +54,7 @@ class LlavaMetaModel:
         mm_patch_merge_type = model_args.mm_patch_merge_type
 
         self.config.mm_vision_tower = vision_tower
+        self.config.mm_use_text_enc = model_args.mm_use_text_enc
 
         if self.get_vision_tower() is None:
             vision_tower = build_vision_tower(model_args)
