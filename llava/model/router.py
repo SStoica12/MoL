@@ -47,7 +47,6 @@ class Router(nn.Module):
         # The two vectors will be pushed towards uniform allocation when the dot product is minimized.
         loss = torch.mean(density_1_proxy * density_1) * (self.num_layers**2)
         return loss # add to graph so remove .item()
-        return loss
 
     def router_probs(self, hidden_states):
         # hidden states are of size:  torch.Size([num_layers, batch_size, num_tokens, hidden_size]).
