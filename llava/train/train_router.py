@@ -21,7 +21,7 @@ import json
 import logging
 import pathlib
 from typing import Dict, Optional, Sequence, List
-from transformers import AutoProcessor, LlavaForConditionalGeneration
+from transformers import AutoProcessor, LlavaForConditionalGeneration, TrainerCallback
 from llava.mm_utils import get_model_name_from_path
 import torch
 
@@ -117,6 +117,47 @@ class TrainingArguments(transformers.TrainingArguments):
     router_lr: Optional[float] = None
     group_by_modality_length: bool = field(default=False)
     load_balancing_alpha : float = 10**-2
+    router_temp_start: float = 2.0
+    router_temp_end: float = 1.0
+    router_temp_schedule: str = field(default="linear")
+
+
+class RouterTempCallback(TrainerCallback):
+    def __init__(self, t_start: float, t_end: float, schedule: str = "linear"):
+        self.t_start = t_start
+        self.t_end = t_end
+        self.schedule = schedule
+        self.last_temp = t_start
+
+    def _compute_temp(self, step: int, max_steps: int) -> float:
+        progress = min(step / max_steps, 1.0)
+        if self.schedule == "linear":
+            return self.t_start + (self.t_end - self.t_start) * progress
+        if self.schedule == "cosine":
+            return self.t_end + 0.5 * (self.t_start - self.t_end) * (1.0 + torch.cos(torch.tensor(progress * torch.pi)).item())
+        if self.schedule == "exp":
+            if self.t_start <= 0 or self.t_end <= 0:
+                return self.t_end
+            return self.t_start * ((self.t_end / self.t_start) ** progress)
+        return self.t_end
+
+    def on_step_end(self, args, state, control, **kwargs):
+        model = kwargs.get("model", None)
+        if model is None:
+            return
+        m = model.module if hasattr(model, "module") else model
+        if not hasattr(m, "router"):
+            return
+        max_steps = max(state.max_steps, 1)
+        t = self._compute_temp(state.global_step, max_steps)
+        self.last_temp = t
+        with torch.no_grad():
+            m.router.router_temperature = t  # NOTE: this is where the temperature is actually set
+
+    def on_log(self, args, state, control, logs=None, **kwargs):
+        if logs is None:
+            return
+        logs["router_temperature"] = self.last_temp
 
 def maybe_zero_3(param, ignore_status=False, name=None):
     from deepspeed import zero
@@ -955,6 +996,7 @@ def train(attn_implementation=None):
         num_image_tokens = (image_size // patch_size)**2 + 1
         router_weights = torch.zeros((num_image_tokens, hidden_size)).to(dtype=torch.bfloat16 if training_args.bf16 else torch.float16, device=training_args.device)
         # print("model.config.mm_vision_select_feature: ", model.config.mm_vision_select_feature) # patch
+        # TODO: implement condition for textrouter vs. router
         model.router = Router(model.config, router_weights, model.config.mm_vision_select_feature, training_args.load_balancing_alpha)
         model.router.num_layers_to_choose = model_args.num_layers_to_choose
         model.router.requires_grad_(True) # we need to learn the router
@@ -1054,6 +1096,13 @@ def train(attn_implementation=None):
                     tokenizer=tokenizer,
                     args=training_args,
                     **data_module)
+    trainer.add_callback(
+        RouterTempCallback(
+            t_start=training_args.router_temp_start,
+            t_end=training_args.router_temp_end,
+            schedule=training_args.router_temp_schedule,
+        )
+    )
     trainer.router = model.router
     # import pdb; pdb.set_trace()
     trainable_params =  [n for n,p in model.named_parameters() if p.requires_grad]
@@ -1091,4 +1140,3 @@ def train(attn_implementation=None):
 
 if __name__ == "__main__":
     train()
-
