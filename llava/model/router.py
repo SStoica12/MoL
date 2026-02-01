@@ -56,7 +56,7 @@ class Router(nn.Module):
         
         if self.save_router_stats and self.training:
             # assert self.step_ep not in self.expert_mask_per_step
-            if self.step_ep % self.save_steps_router_stats:
+            if self.step_ep % self.save_steps_router_stats or self.step_ep == 0:
                 self.expert_mask_per_step[self.step_ep] = expert_mask_full.cpu().to(torch.float32).detach() #.numpy().tolist()
                 self.step_ep += 1
             # with open("./expert_mask_per_step.json", 'w') as f:
@@ -149,7 +149,7 @@ class Router(nn.Module):
         if self.save_router_stats and self.training:
             # print("self.router_info : ", self.router_info)
             # import sys; sys.exit()
-            if self.step_rp % self.save_steps_router_stats:
+            if self.step_rp % self.save_steps_router_stats or self.step_rp == 0:
                 self.router_probs_per_step[self.step_rp] = router_probs.cpu().to(torch.float32).detach() #.numpy().tolist()
                 self.step_rp += 1
         # with open("/shared/nas2/sstoica2/MoL/router_probs_per_step.json", 'w') as f:
