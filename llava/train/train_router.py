@@ -184,6 +184,8 @@ class RouterCallback(TrainerCallback, WandbCallback):
 
         model = kwargs.get("model", None)
         if model is None:
+            model = self.model_ref
+        if model is None:
             return
 
         m = model.module if hasattr(model, "module") else model
