@@ -1250,6 +1250,7 @@ def train(attn_implementation=None):
             t_start=training_args.router_temp_start,
             t_end=training_args.router_temp_end,
             schedule=training_args.router_temp_schedule,
+            save_router_stats= model.router.save_router_stats,
             model = model,
         )
     )
