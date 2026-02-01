@@ -74,7 +74,7 @@ class Router(nn.Module):
         loss = torch.mean(density_1_proxy * density_1) * (self.num_layers**2)
         return loss # add to graph so remove .item()
 
-    def cap_layer_prob(router_probs: torch.Tensor, cap: float, layer: int, eps=1e-12):
+    def cap_layer_prob(self, router_probs: torch.Tensor, cap: float, layer: int, eps=1e-12):
         """
         router_probs: [B, L] softmax probs
         cap: float, e.g. 0.06, enforce probs[:, layer] <= cap
