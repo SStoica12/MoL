@@ -5,7 +5,10 @@ from typing import Optional
 import json
 
 class Router(nn.Module):
-    def __init__(self, config, weights, top_k = 1, load_balancing_alpha=0.01, force_reserve_layer=False, reserve_layer=-2, save_router_stats=True, save_steps_router_stats=200):
+    def __init__(self, config, weights, top_k = 1, 
+                load_balancing_alpha=0.01, force_reserve_layer=False, 
+                reserve_layer=-2, save_router_stats=True, save_steps_router_stats=200, 
+                cap_softmax=False, cap_softmax_value=0.06):
         super().__init__()
         self.num_layers_to_choose = top_k
         self.config = config
@@ -18,6 +21,8 @@ class Router(nn.Module):
         self.reserve_layer = reserve_layer
         self.save_router_stats = save_router_stats
         self.save_steps_router_stats = save_steps_router_stats
+        self.cap_softmax = cap_softmax
+        self.cap_softmax_value = cap_softmax_value
         # stats 
         if save_router_stats and self.training:
             self.router_probs_per_step = {}
@@ -69,6 +74,45 @@ class Router(nn.Module):
         loss = torch.mean(density_1_proxy * density_1) * (self.num_layers**2)
         return loss # add to graph so remove .item()
 
+    def cap_layer_prob(router_probs: torch.Tensor, cap: float, layer: int, eps=1e-12):
+        """
+        router_probs: [B, L] softmax probs
+        cap: float, e.g. 0.06, enforce probs[:, layer] <= cap
+        Returns: probs' [B, L], sums to 1, preserves ranking among i != layer.
+        """
+        assert router_probs.dim() == 2
+        assert 0.0 <= cap < 1.0
+        B, L = router_probs.shape
+
+        p = router_probs
+
+        p_layer = p[:, layer]                       # [B]
+        cap_t = torch.tensor(cap, device=p.device, dtype=p.dtype)
+
+        # rows where we need to cap
+        need = p_layer > cap_t                     # [B]
+        if not need.any():
+            return p
+
+        # sum of non-last mass
+        p_other_sum = p[:, :layer].sum(dim=-1) +  p[:, layer + 1:].sum(dim=-1)    # [B]
+        # print(p_other_sum)
+        # scale factor to make non-last sum become (1 - cap)
+        scale = (1.0 - cap_t) / (p_other_sum + eps)   # [B]
+
+        # build output
+        p_new = p.clone()
+
+        # only apply to rows that need it
+        p_new[need, :layer] = p_new[need, :layer] * scale[need].unsqueeze(-1)
+        p_new[need, layer + 1 : ] = p_new[need, layer + 1 : ] * scale[need].unsqueeze(-1)
+        p_new[need, layer] = cap_t
+
+        s = p_new.sum(dim=-1)
+        assert torch.allclose(s, torch.ones_like(s), atol=1e-5, rtol=1e-5)
+
+        return p_new
+    
     def router_probs(self, hidden_states):
         # hidden states are of size:  torch.Size([num_layers, batch_size, num_tokens, hidden_size]).
         # print("hidden_staes", hidden_states.shape)
@@ -111,6 +155,8 @@ class Router(nn.Module):
         # with open("/shared/nas2/sstoica2/MoL/router_probs_per_step.json", 'w') as f:
         #     json.dump(self.router_probs_per_step, f, indent=4)
         # print("router_probs.shape: ", router_probs.shape)
+        if self.cap_softmax:
+            router_probs = self.cap_layer_prob(router_probs, self.cap_softmax_value, self.reserve_layer)
         return router_probs # torch.Size([batch_size, num_layers])
 
     def get_layer_and_scaling_probs(self, router_probs):

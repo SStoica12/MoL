@@ -75,6 +75,8 @@ class ModelArguments:
     reserve_layer : int = -2
     save_router_stats : bool = True
     save_steps_router_stats : int = 89
+    cap_softmax: bool = False
+    cap_softmax_value: float = 0.06
 
 
 @dataclass
@@ -1124,7 +1126,9 @@ def train(attn_implementation=None):
         model.config.reserve_layer = model_args.reserve_layer
         model.config.save_router_stats = model_args.save_router_stats
         model.config.save_steps_router_stats = model_args.save_steps_router_stats
-
+        model.config.cap_softmax = model_args.cap_softmax
+        model.config.cap_softmax_value = model_args.cap_softmax_value
+        
         image_size = vision_tower.vision_tower.config.image_size
         patch_size = vision_tower.vision_tower.config.patch_size
         hidden_size = vision_tower.vision_tower.config.hidden_size
@@ -1133,11 +1137,16 @@ def train(attn_implementation=None):
         # print("model.config.mm_vision_select_feature: ", model.config.mm_vision_select_feature) # patch
         # TODO: implement condition for textrouter vs. router
         model.router = Router(model.config, router_weights, model.config.mm_vision_select_feature, training_args.load_balancing_alpha)
+        # chooses which layers to apply the router 
         model.router.num_layers_to_choose = model_args.num_layers_to_choose
         model.router.force_reserve_layer = model_args.force_reserve_layer
         model.router.reserve_layer =  model_args.reserve_layer
+        # for logging purposes, not to be used during inference
         model.router.save_steps_router_stats = model_args.save_steps_router_stats
         model.router.save_router_stats = model_args.save_router_stats
+        # make softmax less peaky
+        model.router.cap_softmax = model_args.cap_softmax
+        model.router.cap_softmax_value = model_args.cap_softmax_value
         model.router.requires_grad_(True) # we need to learn the router
 
         # replace zero weights with learned router weights
