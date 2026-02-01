@@ -83,6 +83,8 @@ class Router(nn.Module):
         assert router_probs.dim() == 2
         assert 0.0 <= cap < 1.0
         B, L = router_probs.shape
+        if layer == -1 :
+            layer = L - 1
 
         p = router_probs
 
@@ -168,8 +170,8 @@ class Router(nn.Module):
 
         router_probs = router_probs.clone()
         if self.force_reserve_layer:
-            router_probs[:, self.reserve_layer] = -1.0  # prevent the reserved layer from being selected for calculation of top-k
-        
+            #router_probs[:, self.reserve_layer] = -1.0  # prevent the reserved layer from being selected for calculation of top-k
+            router_probs = self.cap_layer_prob(router_probs, 0, self.reserve_layer)
         sorted_probs, sorted_idxs = torch.sort(router_probs, dim=-1, descending=True)
         probs = sorted_probs[:, :self.num_layers_to_choose]
         layers = sorted_idxs[:, :self.num_layers_to_choose]
@@ -327,25 +329,36 @@ class TextConditionedRouter(Router):
         k = self.num_layers_to_choose
         self.num_layers = L
         router_probs = self.router_probs(hidden_states, text_embeds, text_attention_mask)
-        layers, probs, reserve_layer_prob, _ = self.get_layer_and_scaling_probs(router_probs)
+        if self.force_reserve_layer:
+            layers, probs, reserve_layer_prob = self.get_layer_and_scaling_probs(router_probs)
+        else:
+            layers, probs = self.get_layer_and_scaling_probs(router_probs)
 
-        hidden_states_t = hidden_states.transpose(0, 1)  # [B, L, N, H]
-        layers_expanded = layers.reshape(B, -1, 1, 1).expand(B, k, N, H)
-        hidden_states_chosen = torch.gather(hidden_states_t, 1, layers_expanded)
-        last_hidden_state = hidden_states_t[:, -2, :, :].unsqueeze(1)
-
-        image_interm_features = probs.reshape(B, -1, 1, 1) * hidden_states_chosen
+        hidden_states = hidden_states.transpose(0, 1)
+        layers = layers.reshape(B, -1, 1, 1).expand(B, k, N, H) # [B, k, N, H]     
+        hidden_states_chosen = torch.gather(hidden_states, 1, layers)  # [B, k, N, H]     
+        if self.force_reserve_layer:
+            reserve_hidden_state = hidden_states[:, self.reserve_layer, :, :].unsqueeze(1) # [B, 1, N, H]
+        # print("hidden_states_chosen: ", hidden_states_chosen.shape)
+        # print("last_hidden_state: ", hidden_states_chosen.shape)
+        probs = probs.to(hidden_states_chosen.dtype) # convert from float32 back to bfloat16
+        image_features = probs.reshape(B, -1, 1, 1) * hidden_states_chosen
+        # print("image_interm_features: ", image_interm_features.shape)
         if k > 1:
-            image_interm_features = image_interm_features.sum(dim=1, keepdim=True)
-        image_features = image_interm_features + reserve_layer_prob.reshape(B, -1, 1, 1) * last_hidden_state
+            image_features = image_features.sum(dim=1, keepdim=True) # need to get [B, 1, N, H]
 
-        image_feature = image_features.squeeze(1)
-        if self.vision_feature_select_strategy == "patch":
-            image_feature = image_feature[:, 1:, :]
-        if self.vision_feature_select_strategy == "cls":
-            image_feature = image_feature[:, 0, :]
-        assert image_feature.ndim == 3
-        return image_feature
+        if self.force_reserve_layer:
+            # print("reserve_layer_prob.reshape(B, -1, 1, 1): ", reserve_layer_prob.reshape(B, -1, 1, 1).shape)
+            reserve_layer_prob = reserve_layer_prob.to(hidden_states_chosen.dtype)
+            image_features = image_features + reserve_layer_prob.reshape(B, -1, 1, 1) * reserve_hidden_state # [B, 1, N, H]
+
+        image_features = image_features.squeeze(1) # [B, N, H]
+        if self.vision_feature_select_strategy == "patch": 
+            image_features = image_features[:, 1:, :]
+        if self.vision_feature_select_strategy == "cls": 
+            image_features = image_features[:, 0, :]
+        assert image_features.ndim == 3
+        return image_features
         
         
         
