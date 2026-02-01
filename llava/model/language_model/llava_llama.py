@@ -168,7 +168,7 @@ class RouterLlavaLlamaForCausalLM(LlavaLlamaForCausalLM):
     def get_model(self):
         return self.model
     def encode_images(self, images):
-        print("--------- I AM IN ROUTER ENCODE IMAGES ---------")
+        print("--------- I AM IN MOL ROUTER ENCODE IMAGES ---------")
         vision_tower = self.get_model().get_vision_tower().vision_tower
         device = vision_tower.device
         dtype = vision_tower.dtype

@@ -2,9 +2,10 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from typing import Optional
+import json
 
 class Router(nn.Module):
-    def __init__(self, config, weights, top_k = 1, load_balancing_alpha=0.01):
+    def __init__(self, config, weights, top_k = 1, load_balancing_alpha=0.01, force_reserve_layer=False, reserve_layer=-2, save_router_stats=True, save_steps_router_stats=200):
         super().__init__()
         self.num_layers_to_choose = top_k
         self.config = config
@@ -13,6 +14,18 @@ class Router(nn.Module):
         self.weights = nn.Parameter(weights) #[num_tokens, hidden_size]
         self.load_balancing_alpha = load_balancing_alpha
         self.router_temperature = 1.0
+        self.force_reserve_layer = force_reserve_layer
+        self.reserve_layer = reserve_layer
+        self.save_router_stats = save_router_stats
+        self.save_steps_router_stats = save_steps_router_stats
+        # stats 
+        if save_router_stats and self.training:
+            self.router_probs_per_step = {}
+            self.step_rp = 0
+            self.expert_mask_per_step = {}
+            self.step_ep = 0
+
+
         # self.bias = nn.Parameter(torch.zeros(24)) # typically not used
         # usually MoE have a capacity parameter which restricts how many tokens a expert gets, but 
         # do not do that here, so I removed it
@@ -35,6 +48,15 @@ class Router(nn.Module):
         topk_layers = torch.topk(router_probs, k=k, dim=-1).indices  # [B, k]
         expert_mask_full = F.one_hot(topk_layers, num_classes=self.num_layers).float().sum(dim=1)
         expert_mask_full = F.normalize(expert_mask_full, p=1, dim=-1)
+        
+        if self.save_router_stats and self.training:
+            # assert self.step_ep not in self.expert_mask_per_step
+            if self.step_ep % self.save_steps_router_stats:
+                self.expert_mask_per_step[self.step_ep] = expert_mask_full.cpu().to(torch.float32).detach() #.numpy().tolist()
+                self.step_ep += 1
+            # with open("./expert_mask_per_step.json", 'w') as f:
+            #     json.dump(self.expert_mask_per_step, f, indent=4)
+        
         density_1 = torch.mean(expert_mask_full, dim=0)  # shape: [L]
         # For each core, get fraction of probability mass assigned to each expert
         # from the router across all tokens.
@@ -65,7 +87,7 @@ class Router(nn.Module):
         else:
             router_logits = torch.einsum("lbnh, nh -> bl", hidden_states, self.weights)
        
-
+       
         if self.training:
             # Use the device from hidden_states to avoid issues with offloaded weights
             weights_device = hidden_states.device
@@ -73,31 +95,50 @@ class Router(nn.Module):
             router_logits += random_noise # add random noise to enable exploration to avoid collapse in behavior where always choose same expert
        
         # Convert input to softmax operation from bfloat16 to float32 for stability. <- do I need to do this?
-        #router logits = mtf.to float32(router logits)
+        router_logits = router_logits.to(torch.float32)
 
         temperature = self.router_temperature if self.router_temperature is not None else 1.0
         if temperature != 1.0:
             router_logits = router_logits / temperature
         router_probs = torch.softmax(router_logits, dim=-1).to(router_logits.dtype)
+        
+        if self.save_router_stats and self.training:
+            # print("self.router_info : ", self.router_info)
+            # import sys; sys.exit()
+            if self.step_rp % self.save_steps_router_stats:
+                self.router_probs_per_step[self.step_rp] = router_probs.cpu().to(torch.float32).detach() #.numpy().tolist()
+                self.step_rp += 1
+        # with open("/shared/nas2/sstoica2/MoL/router_probs_per_step.json", 'w') as f:
+        #     json.dump(self.router_probs_per_step, f, indent=4)
         # print("router_probs.shape: ", router_probs.shape)
         return router_probs # torch.Size([batch_size, num_layers])
 
-    def get_layer_and_scaling_probs_and_expert_mask(self, router_probs):
+    def get_layer_and_scaling_probs(self, router_probs):
         # the last dim in router probs is num_layers: 24
         # router_probs = [batch_size, num_layers]
         # exclude the penultimate layer (reserved for last_hidden_state) from top-k selection.
-        router_probs_excluded = router_probs.clone()
-        router_probs_excluded[:, -2] = -1.0  # prevent the reserved layer from being selected for calculation of top-k
-        sorted_probs, sorted_idxs = torch.sort(router_probs_excluded, dim=-1, descending=True)
+
+        # TO DO: modify the code to just have router prob choose the k layers.
+
+        router_probs = router_probs.clone()
+        if self.force_reserve_layer:
+            router_probs[:, self.reserve_layer] = -1.0  # prevent the reserved layer from being selected for calculation of top-k
+        
+        sorted_probs, sorted_idxs = torch.sort(router_probs, dim=-1, descending=True)
         probs = sorted_probs[:, :self.num_layers_to_choose]
         layers = sorted_idxs[:, :self.num_layers_to_choose]
-        last_layer_prob = router_probs[:, -2]
+        
+        if self.force_reserve_layer:
+            reserve_layer_prob = router_probs[:, self.reserve_layer]
+            return layers, probs, reserve_layer_prob
+        
         # build expert mask (top-k safe): [B, k, L] -> [B, L]
         # NOTE: we don't use this expert_mask anymore
-        expert_mask = F.one_hot(layers, num_classes=self.num_layers).float().sum(dim=1)
-        # normalize so each row sums to 1 (important for top-k > 1) -> routing mass needs to be distributed to sum up to 1
-        expert_mask = F.normalize(expert_mask, p=1, dim=-1)
-        return layers, probs, last_layer_prob, expert_mask # [batch_size, num_layers_to_choose] x2, [batch_size, ], [batch_size, num_layers]
+        # expert_mask = F.one_hot(layers, num_classes=self.num_layers).float().sum(dim=1)
+        # # normalize so each row sums to 1 (important for top-k > 1) -> routing mass needs to be distributed to sum up to 1
+        # expert_mask = F.normalize(expert_mask, p=1, dim=-1)
+        
+        return layers, probs # [batch_size, num_layers_to_choose] x2, [batch_size, ], [batch_size, num_layers]
 
     def forward(self, hidden_states):
         """Produce the combine and dispatch tensors used for sending and
@@ -108,31 +149,37 @@ class Router(nn.Module):
         k = self.num_layers_to_choose
         self.num_layers = L
         router_probs = self.router_probs(hidden_states)
-        layers, probs, last_layer_prob, _ = self.get_layer_and_scaling_probs_and_expert_mask(router_probs)
-
+        if self.force_reserve_layer:
+            layers, probs, reserve_layer_prob = self.get_layer_and_scaling_probs(router_probs)
+        else:
+            layers, probs = self.get_layer_and_scaling_probs(router_probs)
+        
         # use torch.gather to gather the indexes in layer to get image_features of shape [B, L, N, H]
         hidden_states = hidden_states.transpose(0, 1)
         layers = layers.reshape(B, -1, 1, 1).expand(B, k, N, H) # [B, k, N, H]     
         hidden_states_chosen = torch.gather(hidden_states, 1, layers)  # [B, k, N, H]     
-        last_hidden_state = hidden_states[:, -2, :, :].unsqueeze(1) # [B, 1, N, H]
+        if self.force_reserve_layer:
+            reserve_hidden_state = hidden_states[:, self.reserve_layer, :, :].unsqueeze(1) # [B, 1, N, H]
         # print("hidden_states_chosen: ", hidden_states_chosen.shape)
         # print("last_hidden_state: ", hidden_states_chosen.shape)
-
-        image_interm_features = probs.reshape(B, -1, 1, 1) * hidden_states_chosen
+        probs = probs.to(hidden_states_chosen.dtype) # convert from float32 back to bfloat16
+        image_features = probs.reshape(B, -1, 1, 1) * hidden_states_chosen
         # print("image_interm_features: ", image_interm_features.shape)
         if k > 1:
-            image_interm_features = image_interm_features.sum(dim=1, keepdim=True) # need to get [B, 1, N, H]
-        # print("last_layer_prob.reshape(B, -1, 1, 1): ", last_layer_prob.reshape(B, -1, 1, 1).shape)
-        image_features = image_interm_features + last_layer_prob.reshape(B, -1, 1, 1) * last_hidden_state
+            image_features = image_features.sum(dim=1, keepdim=True) # need to get [B, 1, N, H]
 
-        # print("image feature after aggregation: ", image_features.shape) # [B, 1, N, H]
-        image_feature = image_features.squeeze(1) # [B, N, H]
+        if self.force_reserve_layer:
+            # print("reserve_layer_prob.reshape(B, -1, 1, 1): ", reserve_layer_prob.reshape(B, -1, 1, 1).shape)
+            reserve_layer_prob = reserve_layer_prob.to(hidden_states_chosen.dtype)
+            image_features = image_features + reserve_layer_prob.reshape(B, -1, 1, 1) * reserve_hidden_state # [B, 1, N, H]
+
+        image_features = image_features.squeeze(1) # [B, N, H]
         if self.vision_feature_select_strategy == "patch": 
-            image_feature = image_feature[:, 1:, :]
+            image_features = image_features[:, 1:, :]
         if self.vision_feature_select_strategy == "cls": 
-            image_feature = image_feature[:, 0, :]
-        assert image_feature.ndim == 3
-        return image_feature
+            image_features = image_features[:, 0, :]
+        assert image_features.ndim == 3
+        return image_features
     
 
 class TextConditionedRouter(Router):
@@ -153,7 +200,7 @@ class TextConditionedRouter(Router):
         top_k=1,
         load_balancing_alpha=0.01,
         text_pool: str = "mean",
-        text_scale: float = 1.0,
+        text_scale: float = 1.0, # overall influence of text. Would this allow us to better modulate the features. hyperparam sweep
     ):
         super().__init__(config, weights, top_k, load_balancing_alpha)
         self.text_pool = text_pool
@@ -208,7 +255,7 @@ class TextConditionedRouter(Router):
         film = self.text_to_film(text_summary)
         gamma, beta = film.chunk(2, dim=-1)
         gamma = torch.tanh(gamma)  # keep modulation bounded
-        gamma = gamma * self.text_scale
+        gamma = gamma * self.text_scale # similar to scale based on what layer we are at
         beta = beta * self.text_scale
         gamma = gamma.unsqueeze(0).unsqueeze(2)
         beta = beta.unsqueeze(0).unsqueeze(2)
@@ -234,7 +281,7 @@ class TextConditionedRouter(Router):
         k = self.num_layers_to_choose
         self.num_layers = L
         router_probs = self.router_probs(hidden_states, text_embeds, text_attention_mask)
-        layers, probs, last_layer_prob, _ = self.get_layer_and_scaling_probs_and_expert_mask(router_probs)
+        layers, probs, reserve_layer_prob, _ = self.get_layer_and_scaling_probs(router_probs)
 
         hidden_states_t = hidden_states.transpose(0, 1)  # [B, L, N, H]
         layers_expanded = layers.reshape(B, -1, 1, 1).expand(B, k, N, H)
@@ -244,7 +291,7 @@ class TextConditionedRouter(Router):
         image_interm_features = probs.reshape(B, -1, 1, 1) * hidden_states_chosen
         if k > 1:
             image_interm_features = image_interm_features.sum(dim=1, keepdim=True)
-        image_features = image_interm_features + last_layer_prob.reshape(B, -1, 1, 1) * last_hidden_state
+        image_features = image_interm_features + reserve_layer_prob.reshape(B, -1, 1, 1) * last_hidden_state
 
         image_feature = image_features.squeeze(1)
         if self.vision_feature_select_strategy == "patch":
