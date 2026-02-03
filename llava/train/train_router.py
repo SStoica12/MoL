@@ -21,10 +21,11 @@ import json
 import logging
 import pathlib
 from typing import Dict, Optional, Sequence, List
-from transformers import AutoProcessor, LlavaForConditionalGeneration
+from transformers import AutoProcessor, LlavaForConditionalGeneration, TrainerCallback
 from llava.mm_utils import get_model_name_from_path
 import torch
-
+import wandb
+from transformers.integrations import WandbCallback
 import transformers
 import tokenizers
 
@@ -69,6 +70,14 @@ class ModelArguments:
     mm_patch_merge_type: Optional[str] = field(default='flat')
     mm_vision_select_feature: Optional[str] = field(default="patch")
     num_layers_to_choose: Optional[int] = field(default=1)
+    mm_use_text_enc: Optional[bool] = True
+    force_reserve_layer: bool = False
+    reserve_layer : int = -2
+    save_router_stats : bool = True
+    save_steps_router_stats : int = 89
+    cap_softmax: bool = False
+    cap_softmax_value: float = 0.06
+
 
 @dataclass
 class DataArguments:
@@ -117,6 +126,170 @@ class TrainingArguments(transformers.TrainingArguments):
     router_lr: Optional[float] = None
     group_by_modality_length: bool = field(default=False)
     load_balancing_alpha : float = 10**-2
+    router_temp_start: float = 2.0
+    router_temp_end: float = 1.0
+    router_temp_schedule: str = field(default="linear")
+
+class RouterCallback(TrainerCallback, WandbCallback):
+    def __init__(self, t_start: float, t_end: float, schedule: str = "linear", save_router_stats=True, model=None):
+        self.t_start = t_start
+        self.t_end = t_end
+        self.schedule = schedule
+        self.last_temp = t_start
+        self.save_router_stats = save_router_stats
+
+        # (optional) buffers for heatmaps
+        self._did_define_metrics = False
+        self._router_prob_rows = []
+        self._router_usage_rows = []
+        self.model_ref = model
+
+    def _compute_temp(self, step: int, max_steps: int) -> float:
+        progress = min(step / max_steps, 1.0)
+        if self.schedule == "linear":
+            return self.t_start + (self.t_end - self.t_start) * progress
+        if self.schedule == "cosine":
+            return self.t_end + 0.5 * (self.t_start - self.t_end) * (1.0 + torch.cos(torch.tensor(progress * torch.pi)).item())
+        if self.schedule == "exp":
+            if self.t_start <= 0 or self.t_end <= 0:
+                return self.t_end
+            return self.t_start * ((self.t_end / self.t_start) ** progress)
+        return self.t_end
+
+    def on_step_end(self, args, state, control, **kwargs):
+        model = kwargs.get("model", None)
+        # print("type of Model: ", model)
+        if model is None:
+            model = self.model_ref
+        if model is None:
+            print(" CAN NOT FIND MODEL FOR LOADING")
+            return 
+        m = model.module if hasattr(model, "module") else model
+        if not hasattr(m, "router"):
+            print("........ where did my router go?")
+            return
+        max_steps = max(state.max_steps, 1)
+        t = self._compute_temp(state.global_step, max_steps)
+        self.last_temp = t
+        with torch.no_grad():
+            m.router.router_temperature = t  # temperature is actually set here
+
+    def on_log(self, args, state, control, logs=None, **kwargs):
+        custom_metrics = {}
+        if logs is None:
+            print("AHHHHHHHHHHHH")
+            return
+        
+        custom_metrics = {"router/callback_alive": 1}
+
+        model = kwargs.get("model", None)
+        if model is None:
+            model = self.model_ref
+        if model is None:
+            return
+
+        m = model.module if hasattr(model, "module") else model
+        router = getattr(m, "router", getattr(getattr(m, "model", None), "router", None))
+        if router is None or not self.save_router_stats:
+            return
+
+        # pick the most recent step in your buffers (or drain them)
+        keys = sorted(router.router_probs_per_step.keys())
+        if not keys:
+            return
+        step_key = keys[-1]
+
+        probs = router.router_probs_per_step.pop(step_key)
+        masks = router.expert_mask_per_step.pop(step_key, None)
+
+        avg_probs = probs.mean(dim=0).float().detach().cpu()
+        for i, v in enumerate(avg_probs):
+            custom_metrics[f"router/prob_expert_{i}"] = float(v)
+
+        if masks is not None:
+            usage = masks.mean(dim=0).float().detach().cpu()
+            for i, v in enumerate(usage):
+                custom_metrics[f"router/usage_expert_{i}"] = float(v)
+
+        custom_metrics["router_temperature"] = float(self.last_temp)
+        wandb.log(custom_metrics) 
+# class RouterCallback(TrainerCallback):
+#     def __init__(self, t_start: float, t_end: float, schedule: str = "linear", save_router_stats=True):
+#         self.t_start = t_start
+#         self.t_end = t_end
+#         self.schedule = schedule
+#         self.last_temp = t_start
+#         self.save_router_stats = save_router_stats
+#         # self.save_steps_router_stats = save_steps_router_stats
+
+#     def _compute_temp(self, step: int, max_steps: int) -> float:
+#         progress = min(step / max_steps, 1.0)
+#         if self.schedule == "linear":
+#             return self.t_start + (self.t_end - self.t_start) * progress
+#         if self.schedule == "cosine":
+#             return self.t_end + 0.5 * (self.t_start - self.t_end) * (1.0 + torch.cos(torch.tensor(progress * torch.pi)).item())
+#         if self.schedule == "exp":
+#             if self.t_start <= 0 or self.t_end <= 0:
+#                 return self.t_end
+#             return self.t_start * ((self.t_end / self.t_start) ** progress)
+#         return self.t_end
+
+#     def on_step_end(self, args, state, control, **kwargs):
+#         model = kwargs.get("model", None)
+#         if model is None:
+#             return
+#         m = model.module if hasattr(model, "module") else model
+#         if not hasattr(m, "router"):
+#             return
+#         max_steps = max(state.max_steps, 1)
+#         t = self._compute_temp(state.global_step, max_steps)
+#         self.last_temp = t
+#         with torch.no_grad():
+#             m.router.router_temperature = t  # NOTE: this is where the temperature is actually set
+
+#     def on_log(self, args, state, control, model=None, logs=None, **kwargs):
+#         if not state.is_world_process_zero or model is None:
+#             return
+            
+#         model_ref = model.module if hasattr(model, "module") else model
+#         # print("model_ref : ", model_ref)
+#         router = getattr(model_ref, "router", getattr(getattr(model_ref, "model", None), "router", None))
+#         # print("router : ", router)
+        
+#         if router is not None and self.save_router_stats:
+#             # Sort keys to ensure we log in chronological order
+#             keys = sorted(list(router.router_probs_per_step.keys()))
+            
+#             for step_key in keys:
+#                 # Use .pop() to 'drain' the dict and save memory
+#                 probs = router.router_probs_per_step.pop(step_key)
+#                 masks = router.expert_mask_per_step.pop(step_key, None)
+                
+#                 # Compute means (Move to CPU/Float immediately)
+#                 avg_probs = probs.mean(dim=0).float()
+#                 usage = masks.mean(dim=0).float()
+
+#                 # Build a single payload for this specific step
+#                 payload = {}
+#                 for i, val in enumerate(avg_probs):
+#                     payload[f"router/prob_expert_{i}"] = val.item()
+                
+#                 for i, val in enumerate(usage):
+#                     payload[f"router/usage_expert_{i}"] = val.item()
+
+#                 wandb.log(payload, step=step_key)
+#             if logs is None:
+#                 return
+#             if logs is not None and len(keys) > 0:
+#                 # We only put single floats/ints in 'logs', never tensors or dicts
+#                 logs["router_temperature"] = self.last_temp
+#                 # Log the average of the most recent expert usage as a summary
+#                 if usage is not None:
+#                     logs["router_usage_std"] = usage.std().item()
+
+#             # Final safety clear
+#             router.router_probs_per_step.clear()
+#             router.expert_mask_per_step.clear()
 
 def maybe_zero_3(param, ignore_status=False, name=None):
     from deepspeed import zero
@@ -175,7 +348,7 @@ def get_mm_adapter_state_maybe_zero_3(named_params, keys_to_match):
 def find_all_linear_names(model):
     cls = torch.nn.Linear
     lora_module_names = set()
-    multimodal_keywords = ['mm_projector', 'vision_tower', 'vision_resampler']
+    multimodal_keywords = ['mm_projector', 'vision_tower', 'vision_resampler', 'router']
     for name, module in model.named_modules():
         if any(mm_keyword in name for mm_keyword in multimodal_keywords):
             continue
@@ -193,9 +366,11 @@ def safe_save_model_for_hf_trainer(trainer: transformers.Trainer,
     """Collects the state dict and dump to disk."""
 
     if getattr(trainer.args, "tune_mm_mlp_adapter", False):
-        print("=============== I AM IN KEYS TO MATCH ===============")
+        # print("=============== I AM IN KEYS TO MATCH ===============")
         # Only save Adapter and scaling coefs
-        keys_to_match = ['mm_projector', 'scaling_coef']
+        keys_to_match = ['mm_projector', 'router']
+        if getattr(trainer.args, "tune_residual_scaling_coef", False):
+            keys_to_match.extend(['scaling_coef'])
         if getattr(trainer.args, "use_im_start_end", False):
             keys_to_match.extend(['embed_tokens', 'embed_in'])
         # save also residuals if being trained
@@ -217,12 +392,12 @@ def safe_save_model_for_hf_trainer(trainer: transformers.Trainer,
         return
 
     if trainer.deepspeed:
-        print("=============== I AM IN DEEPSEED ===============")
+        # print("=============== I AM IN DEEPSEED ===============")
         torch.cuda.synchronize()
         # import pdb; pdb.set_trace()
         trainer.save_model(output_dir) # breaks here
         return
-    print("=============== I AM IN JUST OUTSIDE ===============")
+    # print("=============== I AM IN JUST OUTSIDE ===============")
     state_dict = trainer.model.state_dict()
     if trainer.args.should_save:
         cpu_state_dict = {
@@ -814,7 +989,7 @@ def make_supervised_data_module(tokenizer: transformers.PreTrainedTokenizer,
 
 def train(attn_implementation=None):
     global local_rank
-    print("====================== SUCCESSFULLY IN TRAINER ROUTER ======================")
+    print("====================== SUCCESSFULLY IN MOL TRAINER ROUTER ======================")
     parser = transformers.HfArgumentParser(
         (ModelArguments, DataArguments, TrainingArguments))
     model_args, data_args, training_args = parser.parse_args_into_dataclasses()
@@ -949,14 +1124,31 @@ def train(attn_implementation=None):
         vision_tower = model.get_vision_tower()
         vision_tower.to(dtype=torch.bfloat16 if training_args.bf16 else torch.float16, device=training_args.device)
         
+        model.config.force_reserve_layer = model_args.force_reserve_layer
+        model.config.reserve_layer = model_args.reserve_layer
+        model.config.save_router_stats = model_args.save_router_stats
+        model.config.save_steps_router_stats = model_args.save_steps_router_stats
+        model.config.cap_softmax = model_args.cap_softmax
+        model.config.cap_softmax_value = model_args.cap_softmax_value
+        
         image_size = vision_tower.vision_tower.config.image_size
         patch_size = vision_tower.vision_tower.config.patch_size
         hidden_size = vision_tower.vision_tower.config.hidden_size
         num_image_tokens = (image_size // patch_size)**2 + 1
         router_weights = torch.zeros((num_image_tokens, hidden_size)).to(dtype=torch.bfloat16 if training_args.bf16 else torch.float16, device=training_args.device)
         # print("model.config.mm_vision_select_feature: ", model.config.mm_vision_select_feature) # patch
+        # TODO: implement condition for textrouter vs. router
         model.router = Router(model.config, router_weights, model.config.mm_vision_select_feature, training_args.load_balancing_alpha)
+        # chooses which layers to apply the router 
         model.router.num_layers_to_choose = model_args.num_layers_to_choose
+        model.router.force_reserve_layer = model_args.force_reserve_layer
+        model.router.reserve_layer =  model_args.reserve_layer
+        # for logging purposes, not to be used during inference
+        model.router.save_steps_router_stats = model_args.save_steps_router_stats
+        model.router.save_router_stats = model_args.save_router_stats
+        # make softmax less peaky
+        model.router.cap_softmax = model_args.cap_softmax
+        model.router.cap_softmax_value = model_args.cap_softmax_value
         model.router.requires_grad_(True) # we need to learn the router
 
         # replace zero weights with learned router weights
@@ -965,8 +1157,9 @@ def train(attn_implementation=None):
             def get_w(weights, keyword):
                 return {k.split(keyword + '.')[1]: v for k, v in weights.items() if keyword in k}
             model.router.load_state_dict(get_w(weights, 'router'))
+            print("router weights: ", model.router.weights)
 
-
+        print("use_text_enc: ", model_args.mm_use_text_enc)
         # # populate with weights and biases from the checkpoint
         # missing, unexpected = model.load_state_dict(model_base.state_dict(), strict=False)
         # # print(missing)
@@ -1054,11 +1247,21 @@ def train(attn_implementation=None):
                     tokenizer=tokenizer,
                     args=training_args,
                     **data_module)
+    trainer.add_callback(
+        RouterCallback(
+            t_start=training_args.router_temp_start,
+            t_end=training_args.router_temp_end,
+            schedule=training_args.router_temp_schedule,
+            save_router_stats= model.router.save_router_stats,
+            model = model,
+        )
+    )
     trainer.router = model.router
     # import pdb; pdb.set_trace()
     trainable_params =  [n for n,p in model.named_parameters() if p.requires_grad]
     for n in trainable_params:
         assert 'scaling_coef' not in n
+        assert 'vision_tower' not in n
     print("TRAINABLE parameters:",
       [n for n,p in model.named_parameters() if p.requires_grad])
     # import sys; sys.exit(0)
@@ -1087,8 +1290,8 @@ def train(attn_implementation=None):
     else:
         safe_save_model_for_hf_trainer(trainer=trainer,
                                        output_dir=training_args.output_dir)
-
+    # with open("/shared/nas2/sstoica2/MoL/router_info_per_step.json", 'w') as f:
+    #     json.dump(model.router.router_info, f, indent=4)
 
 if __name__ == "__main__":
     train()
-

@@ -122,11 +122,10 @@ class RouterLlavaMptForCausalLM(LlavaMptForCausalLM):
         # assert image_features.requires_grad == True
         return image_features
     
-    def get_router_probs_and_expert_mask(self, hidden_states):
+    def get_router_probs(self, hidden_states):
         hidden_states = torch.stack(list(hidden_states)) # [num_layers, batch_size, num_image_tokens, vision_hidden_dim]
         router_probs = self.router.router_probs(hidden_states[1:, :, :, :]) # remove embedding
-        _, _, _, expert_mask = self.router.get_layer_and_scaling_probs_and_expert_mask(router_probs)
-        return router_probs, expert_mask
+        return router_probs
     
     def get_aux_loss(self, images):
         # calculate the hidden states
@@ -138,13 +137,13 @@ class RouterLlavaMptForCausalLM(LlavaMptForCausalLM):
             losses = []
             for image in images:
                 image_forward_outs = vision_tower(image.to(device=device, dtype=dtype), output_hidden_states=True) # all 25 layers have  torch.Size([32, 577, 1024])
-                router_probs, expert_mask = self.get_router_probs_and_expert_mask(image_forward_outs.hidden_states)
-                losses.append(self.router.load_balance_loss(router_probs, expert_mask))
+                router_probs = self.get_router_probs(image_forward_outs.hidden_states)
+                losses.append(self.router.load_balance_loss(router_probs))
             loss = sum(losses) / len(losses)
         else:
             image_forward_outs = vision_tower(images.to(device=device, dtype=dtype), output_hidden_states=True) # all 25 layers have  torch.Size([32, 577, 1024])
-            router_probs, expert_mask = self.get_router_probs_and_expert_mask(image_forward_outs.hidden_states)
-            loss = self.router.load_balance_loss(router_probs, expert_mask)
+            router_probs = self.get_router_probs(image_forward_outs.hidden_states)
+            loss = self.router.load_balance_loss(router_probs)
         return loss
 
 AutoConfig.register("llava_mpt", LlavaMptConfig)
