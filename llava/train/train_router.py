@@ -175,6 +175,11 @@ class RouterCallback(TrainerCallback):
             m.router.router_temperature = t  # temperature is actually set here
 
     def on_log(self, args, state, control, logs=None, **kwargs):
+        if not state.is_world_process_zero:
+            return
+        if wandb.run is None:
+            wandb.init(project="llava-router")
+            # return
         custom_metrics = {}
         if logs is None:
             print("AHHHHHHHHHHHH")
@@ -1244,7 +1249,7 @@ def train(attn_implementation=None):
     data_module = make_supervised_data_module(tokenizer=tokenizer,
                                               data_args=data_args)
     # initialize wandb
-    wandb.init()
+    # wandb.init()
     trainer = RouterLLaVATrainer(model=model,
                     tokenizer=tokenizer,
                     args=training_args,
