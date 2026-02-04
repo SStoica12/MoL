@@ -130,7 +130,7 @@ class TrainingArguments(transformers.TrainingArguments):
     router_temp_end: float = 1.0
     router_temp_schedule: str = field(default="linear")
 
-class RouterCallback(TrainerCallback, WandbCallback):
+class RouterCallback(TrainerCallback):
     def __init__(self, t_start: float, t_end: float, schedule: str = "linear", save_router_stats=True, model=None):
         self.t_start = t_start
         self.t_end = t_end
@@ -1243,6 +1243,8 @@ def train(attn_implementation=None):
 
     data_module = make_supervised_data_module(tokenizer=tokenizer,
                                               data_args=data_args)
+    # initialize wandb
+    wandb.init()
     trainer = RouterLLaVATrainer(model=model,
                     tokenizer=tokenizer,
                     args=training_args,
