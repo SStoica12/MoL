@@ -8,12 +8,136 @@ import shortuuid
 
 from llava.constants import IMAGE_TOKEN_INDEX, DEFAULT_IMAGE_TOKEN, DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN
 from llava.conversation import conv_templates, SeparatorStyle
-from llava.model.builder import load_pretrained_model
+from llava.model.builder import load_pretrained_model, load_pretrained_model_router
 from llava.utils import disable_torch_init
 from llava.mm_utils import tokenizer_image_token, process_images, load_image_from_base64, get_model_name_from_path
 
 from PIL import Image
 import math
+
+
+import os
+import torch
+from safetensors.torch import load_file
+import glob
+def verify_loaded_model(
+    model,
+    model_path: str,
+    *,
+    atol: float = 1e-3,
+    rtol: float = 1e-3,
+    check_router_dtype: torch.dtype = torch.bfloat16,
+    strict_key_coverage: bool = True,
+    max_print_mismatches: int = 5,
+):
+    """
+    Verifies that in-memory model weights match safetensor shard weights.
+
+    Key fixes vs your version:
+      - Compare in *disk dtype* (cast live -> disk dtype), not disk -> live dtype.
+      - Use CPU tensors for both; avoids device mismatch.
+      - Optional: ensure all keys in shards exist in model (strict_key_coverage).
+      - Explicitly validate router.weights dtype (bf16 by default).
+    """
+    print(f"\n--- Starting Deep Verification against safetensor shards in: {model_path} ---")
+
+    live_state_dict = model.state_dict()  # refs; ok
+
+    shard_files = sorted(glob.glob(os.path.join(model_path, "*.safetensors")))
+    if not shard_files:
+        raise FileNotFoundError(f"No .safetensors shards found in {model_path}")
+
+    # --- Router dtype check (what you asked for) ---
+    router_key_candidates = [k for k in live_state_dict.keys() if k.endswith("router.weights") or k == "router.weights"]
+    if len(router_key_candidates) == 0:
+        print("⚠️  Router dtype check: could not find a key ending with 'router.weights' in model.state_dict().")
+    else:
+        for rk in router_key_candidates:
+            dt = live_state_dict[rk].dtype
+            if dt != check_router_dtype:
+                print(f"❌ Router dtype mismatch for {rk}: live dtype={dt}, expected={check_router_dtype}")
+            else:
+                print(f"✅ Router dtype OK for {rk}: {dt}")
+
+    total_keys_checked = 0
+    mismatches = []
+    missing_in_live = []
+
+    for shard_path in shard_files:
+        print(f"Checking shard: {shard_path} ...")
+        disk_weights = load_file(shard_path)  # typically already on CPU
+
+        for key, disk_tensor in disk_weights.items():
+            if key not in live_state_dict:
+                if strict_key_coverage:
+                    missing_in_live.append(key)
+                continue
+
+            live_tensor = live_state_dict[key]
+
+            # Move live to CPU
+            try:
+                live_cpu = live_tensor.detach().cpu()
+            except:
+                print("PROBLEMS WITH TENSOR")
+                print("key : ", key)
+                print("live_tensor : ", live_tensor)
+                import sys; sys.exit(0)
+            disk_cpu = disk_tensor.detach().cpu()
+
+            # IMPORTANT: cast LIVE -> DISK dtype (most faithful to the checkpoint)
+            if live_cpu.dtype != disk_cpu.dtype:
+                live_cpu = live_cpu.to(disk_cpu.dtype)
+
+            # Compare
+            ok = torch.allclose(live_cpu, disk_cpu, atol=atol, rtol=rtol)
+            if not ok:
+                mismatches.append(key)
+                if len(mismatches) <= max_print_mismatches:
+                    # show a tiny diff summary
+                    diff = (live_cpu.flatten()[:8] - disk_cpu.flatten()[:8]).abs()
+                    print(f"❌ MISMATCH at {key}")
+                    print(f"   disk dtype={disk_cpu.dtype}, live dtype(after cast)={live_cpu.dtype}, shape={tuple(disk_cpu.shape)}")
+                    print(f"   Disk (First 3): {disk_cpu.flatten()[:3].tolist()}")
+                    print(f"   Live (First 3): {live_cpu.flatten()[:3].tolist()}")
+                    print(f"   |diff| (First 3): {diff[:3].tolist()}")
+
+            total_keys_checked += 1
+
+    print("-" * 60)
+
+    if strict_key_coverage and missing_in_live:
+        print(f"🚨 KEY COVERAGE FAILED: {len(missing_in_live)} keys exist in shards but not in model.state_dict().")
+        print("   (This can be OK if you intentionally changed architecture / removed modules.)")
+        print("   First 10 missing keys:")
+        for k in missing_in_live[:10]:
+            print(f"   - {k}")
+        print("-" * 60)
+
+    if mismatches:
+        print(f"🚨 VALUE CHECK FAILED: Found {len(mismatches)} mismatched keys out of {total_keys_checked} compared keys.")
+        # Helpful breakdowns
+        vision_errors = [k for k in mismatches if "vision_tower" in k]
+        router_errors = [k for k in mismatches if "router" in k]
+        if vision_errors:
+            print(f"   -> {len(vision_errors)} mismatches are in the vision tower.")
+        if router_errors:
+            print(f"   -> {len(router_errors)} mismatches are in the router.")
+        print("   Note: small mismatches can still come from dtype/quantization differences;")
+        print("   but if you cast live->disk dtype (as done here), these should be much rarer.")
+    else:
+        print(f"✅ SUCCESS: Verified {total_keys_checked} keys. In-memory tensors match shard tensors within atol/rtol.")
+
+    print("-" * 60)
+    return {
+        "total_keys_checked": total_keys_checked,
+        "num_mismatches": len(mismatches),
+        "mismatches": mismatches,
+        "num_missing_in_live": len(missing_in_live),
+        "missing_in_live": missing_in_live,
+    }
+
+
 
 
 all_options = ['A', 'B', 'C', 'D']
@@ -56,8 +180,15 @@ def eval_model(args):
     disable_torch_init()
     model_path = os.path.expanduser(args.model_path)
     model_name = get_model_name_from_path(model_path)
-    tokenizer, model, image_processor, context_len = load_pretrained_model(model_path, args.model_base, model_name)
-
+    # import pdb; pdb.set_trace()
+    # tokenizer, model, image_processor, context_len = load_pretrained_model(model_path, args.model_base, model_name)
+    if args.use_router == "True":
+        print(f"\n      we should be using router")
+        tokenizer, model, image_processor, context_len = load_pretrained_model_router(model_path, args.model_base, model_name)
+    else:
+        print(f"\n      not using router")
+        tokenizer, model, image_processor, context_len = load_pretrained_model(model_path, args.model_base, model_name)
+    verify_loaded_model(model, model_path)
     questions = pd.read_table(os.path.expanduser(args.question_file))
     questions = get_chunk(questions, args.num_chunks, args.chunk_idx)
     answers_file = os.path.expanduser(args.answers_file)
@@ -142,10 +273,14 @@ def eval_model(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--model-path", type=str, default="facebook/opt-350m")
+    parser.add_argument("--use_router", type=str, default="True")
+    parser.add_argument("--num_layers_to_choose", type=int, default=1)
+    parser.add_argument("--router_alpha", type=int, default=10**-2)
     parser.add_argument("--model-base", type=str, default=None)
     parser.add_argument("--image-folder", type=str, default="")
     parser.add_argument("--question-file", type=str, default="tables/question.jsonl")
     parser.add_argument("--answers-file", type=str, default="answer.jsonl")
+    parser.add_argument('--output_grouped_questions', default="gqa_grouped_questions.json", type=str, help="Output filename for grouped questions JSON.")
     parser.add_argument("--conv-mode", type=str, default="llava_v1")
     parser.add_argument("--num-chunks", type=int, default=1)
     parser.add_argument("--chunk-idx", type=int, default=0)
