@@ -257,12 +257,7 @@ class LLaVATrainer(Trainer):
         # to provide background: because LLaVA overised the _save_checkpoint function and removes the 
         # deepseed save call, "global_step" is not being saved in the checkpoints, resulting in deepspeed
         # becing unable to restart.
-        if self.is_deepspeed_enabled:
-            checkpoint_folder = f"checkpoint-{self.state.global_step}"
-            run_dir = self._get_output_dir(trial=trial)
-            output_dir = os.path.join(run_dir, checkpoint_folder)
-            # have deepspeed save what it needs to
-            self.deepspeed.save_checkpoint(output_dir)
+
         
         if getattr(self.args, 'tune_mm_mlp_adapter', False):
             from transformers.trainer_utils import PREFIX_CHECKPOINT_DIR
@@ -270,6 +265,7 @@ class LLaVATrainer(Trainer):
 
             run_dir = self._get_output_dir(trial=trial)
             output_dir = os.path.join(run_dir, checkpoint_folder)
+            self._save_optimizer_and_scheduler(output_dir)
 
             # save MLP and router
             keys_to_match = ['mm_projector', 'vision_resampler', 'scaling_coef']
@@ -466,12 +462,6 @@ class RouterLLaVATrainer(Trainer):
         # to provide background: because LLaVA overised the _save_checkpoint function and removes the 
         # deepseed save call, "global_step" is not being saved in the checkpoints, resulting in deepspeed
         # becing unable to restart.
-        if self.is_deepspeed_enabled:
-            checkpoint_folder = f"checkpoint-{self.state.global_step}"
-            run_dir = self._get_output_dir(trial=trial)
-            output_dir = os.path.join(run_dir, checkpoint_folder)
-            # have deepspeed save what it needs to
-            self.deepspeed.save_checkpoint(output_dir)
         
         if getattr(self.args, 'tune_mm_mlp_adapter', False):
             from transformers.trainer_utils import PREFIX_CHECKPOINT_DIR
@@ -479,6 +469,7 @@ class RouterLLaVATrainer(Trainer):
 
             run_dir = self._get_output_dir(trial=trial)
             output_dir = os.path.join(run_dir, checkpoint_folder)
+            self._save_optimizer_and_scheduler(output_dir)
 
             # Only save Adapter
             keys_to_match = ['mm_projector', 'vision_resampler', 'router']
