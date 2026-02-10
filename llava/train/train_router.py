@@ -21,11 +21,10 @@ import json
 import logging
 import pathlib
 from typing import Dict, Optional, Sequence, List
-from transformers import AutoProcessor, LlavaForConditionalGeneration, TrainerCallback
+from transformers import TrainerCallback
 from llava.mm_utils import get_model_name_from_path
 import torch
 import wandb
-from transformers.integrations import WandbCallback
 import transformers
 import tokenizers
 
@@ -77,6 +76,10 @@ class ModelArguments:
     save_steps_router_stats : int = 89
     cap_softmax: bool = False
     cap_softmax_value: float = 0.06
+    learnable_gate: bool = False
+    confidence_gate: bool = False
+    confidence_gate_threshold: float = 0.6
+    confidence_gate_slope: float = 10.0
 
 
 @dataclass
@@ -130,7 +133,7 @@ class TrainingArguments(transformers.TrainingArguments):
     router_temp_end: float = 1.0
     router_temp_schedule: str = field(default="linear")
 
-class RouterCallback(TrainerCallback, WandbCallback):
+class RouterCallback(TrainerCallback):
     def __init__(self, t_start: float, t_end: float, schedule: str = "linear", save_router_stats=True, model=None):
         self.t_start = t_start
         self.t_end = t_end
@@ -178,6 +181,10 @@ class RouterCallback(TrainerCallback, WandbCallback):
         custom_metrics = {}
         if logs is None:
             print("AHHHHHHHHHHHH")
+            return
+        if not state.is_world_process_zero:
+            return
+        if wandb.run is None:
             return
         
         custom_metrics = {"router/callback_alive": 1}
@@ -1130,6 +1137,10 @@ def train(attn_implementation=None):
         model.config.save_steps_router_stats = model_args.save_steps_router_stats
         model.config.cap_softmax = model_args.cap_softmax
         model.config.cap_softmax_value = model_args.cap_softmax_value
+        model.config.learnable_gate = model_args.learnable_gate
+        model.config.confidence_gate = model_args.confidence_gate
+        model.config.confidence_gate_threshold = model_args.confidence_gate_threshold
+        model.config.confidence_gate_slope = model_args.confidence_gate_slope
         
         image_size = vision_tower.vision_tower.config.image_size
         patch_size = vision_tower.vision_tower.config.patch_size
@@ -1138,7 +1149,16 @@ def train(attn_implementation=None):
         router_weights = torch.zeros((num_image_tokens, hidden_size)).to(dtype=torch.bfloat16 if training_args.bf16 else torch.float16, device=training_args.device)
         # print("model.config.mm_vision_select_feature: ", model.config.mm_vision_select_feature) # patch
         # TODO: implement condition for textrouter vs. router
-        model.router = Router(model.config, router_weights, model.config.mm_vision_select_feature, training_args.load_balancing_alpha)
+        model.router = Router(
+            model.config,
+            router_weights,
+            model.config.mm_vision_select_feature,
+            training_args.load_balancing_alpha,
+            learnable_gate=model_args.learnable_gate,
+            confidence_gate=model_args.confidence_gate,
+            confidence_gate_threshold=model_args.confidence_gate_threshold,
+            confidence_gate_slope=model_args.confidence_gate_slope,
+        )
         # chooses which layers to apply the router 
         model.router.num_layers_to_choose = model_args.num_layers_to_choose
         model.router.force_reserve_layer = model_args.force_reserve_layer
@@ -1149,6 +1169,12 @@ def train(attn_implementation=None):
         # make softmax less peaky
         model.router.cap_softmax = model_args.cap_softmax
         model.router.cap_softmax_value = model_args.cap_softmax_value
+        model.router.learnable_gate = model_args.learnable_gate
+        model.router.confidence_gate = model_args.confidence_gate
+        model.router.confidence_gate_threshold = model_args.confidence_gate_threshold
+        model.router.confidence_gate_slope = model_args.confidence_gate_slope
+        if model.router.learnable_gate and model.router.reserve_gate is None:
+            model.router.reserve_gate = torch.nn.Linear(hidden_size, 1).to(device=training_args.device)
         model.router.requires_grad_(True) # we need to learn the router
 
         # replace zero weights with learned router weights

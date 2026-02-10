@@ -479,6 +479,7 @@ class RouterLLaVATrainer(Trainer):
 
             run_dir = self._get_output_dir(trial=trial)
             output_dir = os.path.join(run_dir, checkpoint_folder)
+            self._save_optimizer_and_scheduler(output_dir)  # NOTE: save optimizer and scheduler states with deepspeed
 
             # Only save Adapter
             keys_to_match = ['mm_projector', 'vision_resampler', 'router']
@@ -497,6 +498,17 @@ class RouterLLaVATrainer(Trainer):
         if getattr(self.args, 'tune_mm_mlp_adapter', False):
             pass
         else:
+            # Ensure generation_config is valid before save_pretrained
+            gen_cfg = getattr(self.model, "generation_config", None)
+            if gen_cfg is not None:
+                do_sample = getattr(gen_cfg, "do_sample", None)
+                temperature = getattr(gen_cfg, "temperature", None)
+                top_p = getattr(gen_cfg, "top_p", None)
+                if do_sample is False:
+                    if temperature is None or temperature != 1.0:
+                        gen_cfg.temperature = 1.0
+                    if top_p is None or top_p != 1.0:
+                        gen_cfg.top_p = 1.0
             super(RouterLLaVATrainer, self)._save(output_dir, state_dict) # problem here
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch: torch.Tensor | None = None):

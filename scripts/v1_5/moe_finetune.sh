@@ -1,13 +1,28 @@
 #!/bin/bash
 export DS_BUILD_CPU_ADAM=1
-deepspeed /shared/nas2/sstoica2/MoL/llava/train/train_mem_router.py \
-    --deepspeed /shared/nas2/sstoica2/LLaVA/scripts/zero3_offload.json \
+
+#!/bin/bash
+export WANDB_ENTITY="uiucnlp"
+export WANDB_PROJECT="mixture-of-layers"
+export WANDB_NAME="MoL_router_choose_layers_finetune"
+export WANDB_MODE="online"  # ensure it uploads
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+# DEEPSPEED_CONFIG="${DEEPSPEED_CONFIG:-${REPO_ROOT}/scripts/zero3_offload.json}"
+DEEPSPEED_CONFIG="${DEEPSPEED_CONFIG:-${REPO_ROOT}/scripts/zero3.json}"
+DATA_PATH="${DATA_PATH:-/shared/nas2/sstoica2/LLaVA/playground/data/eval/llava_v1_5_mix665k.json}"
+IMAGE_FOLDER="${IMAGE_FOLDER:-/shared/nas2/sstoica2/LLaVA/playground/data/eval}"
+PRETRAIN_DIR="${PRETRAIN_DIR:-${REPO_ROOT}/checkpoints/llava-v1.5-13b-moe-pretrain_2e-4_router_learnable-gate}"
+OUTPUT_DIR="${OUTPUT_DIR:-${REPO_ROOT}/checkpoints/llava-v1.5-13b-moe-finetune_2e-4_router_learnable-gate}"
+
+deepspeed "${REPO_ROOT}/llava/train/train_mem_router.py" \
+    --deepspeed "${DEEPSPEED_CONFIG}" \
     --model_name_or_path lmsys/vicuna-13b-v1.5 \
     --version v1 \
-    --data_path /shared/nas2/sstoica2/LLaVA/playground/data/eval/llava_v1_5_mix665k.json \
-    --image_folder /shared/nas2/sstoica2/LLaVA/playground/data/eval \
+    --data_path "${DATA_PATH}" \
+    --image_folder "${IMAGE_FOLDER}" \
     --vision_tower openai/clip-vit-large-patch14-336 \
-    --pretrain_mm_mlp_adapter /shared/nas2/sstoica2/MoL/checkpoints/llava-v1.5-13b-moe-pretrain_2e-4_router-j/mm_projector.bin \
+    --pretrain_mm_mlp_adapter "${PRETRAIN_DIR}/mm_projector.bin" \
     --mm_projector_type mlp2x_gelu \
     --freeze_residual_scaling_coef True \
     --mm_vision_select_layer -2 \
@@ -16,18 +31,18 @@ deepspeed /shared/nas2/sstoica2/MoL/llava/train/train_mem_router.py \
     --image_aspect_ratio pad \
     --group_by_modality_length True \
     --bf16 True \
-    --output_dir /shared/nas2/sstoica2/MOL/checkpoints/llava-v1.5-13b-moe-finetune_2e-4_router-j\
+    --output_dir "${OUTPUT_DIR}" \
     --num_train_epochs 1 \
     --per_device_train_batch_size 16 \
     --per_device_eval_batch_size 4 \
-    --gradient_accumulation_steps 1 \
+    --gradient_accumulation_steps 2 \
     --evaluation_strategy "no" \
     --save_strategy "steps" \
-    --save_steps  210 \
+    --save_steps 218 \
     --save_total_limit 100 \
     --learning_rate 2e-5 \
     --mm_projector_lr 2e-5 \
-    --router_lr 2e-4 \
+    --router_lr 2e-5 \
     --weight_decay 0. \
     --warmup_ratio 0.03 \
     --lr_scheduler_type "cosine" \
@@ -37,8 +52,14 @@ deepspeed /shared/nas2/sstoica2/MoL/llava/train/train_mem_router.py \
     --gradient_checkpointing True \
     --dataloader_num_workers 4 \
     --lazy_preprocess True \
-    --report_to wandb \
-    --force_reserve_layer False \
+    --force_reserve_layer True \
     --reserve_layer -2 \
+    --learnable_gate True \
+    --confidence_gate False \
+    --confidence_gate_threshold 0.6 \
+    --confidence_gate_slope 10.0 \
     --save_router_stats True \
     --save_steps_router_stats 5 \
+    --report_to wandb \
+
+python /shared/nas/data/m1/sstoica2/PAPO_copy/debug_gpu.py --gpus 0,1,2,3 --memory 70

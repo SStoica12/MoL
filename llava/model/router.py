@@ -8,7 +8,9 @@ class Router(nn.Module):
     def __init__(self, config, weights, top_k = 1, 
                 load_balancing_alpha=0.01, force_reserve_layer=False, 
                 reserve_layer=-2, save_router_stats=True, save_steps_router_stats=200, 
-                cap_softmax=False, cap_softmax_value=0.06):
+                cap_softmax=False, cap_softmax_value=0.06,
+                learnable_gate=False, confidence_gate=False,
+                confidence_gate_threshold=0.6, confidence_gate_slope=10.0):
         super().__init__()
         self.num_layers_to_choose = top_k
         self.config = config
@@ -23,13 +25,19 @@ class Router(nn.Module):
         self.save_steps_router_stats = save_steps_router_stats
         self.cap_softmax = cap_softmax
         self.cap_softmax_value = cap_softmax_value
+        self.learnable_gate = learnable_gate
+        self.confidence_gate = confidence_gate
+        self.confidence_gate_threshold = confidence_gate_threshold
+        self.confidence_gate_slope = confidence_gate_slope
+        self.reserve_gate = nn.Linear(weights.shape[1], 1) if learnable_gate else None
+        if self.learnable_gate and self.confidence_gate:
+            raise ValueError("learnable_gate and confidence_gate are mutually exclusive.")
         # stats 
         if save_router_stats and self.training:
             self.router_probs_per_step = {}
             self.step_rp = 0
             self.expert_mask_per_step = {}
             self.step_ep = 0
-
 
         # self.bias = nn.Parameter(torch.zeros(24)) # typically not used
         # usually MoE have a capacity parameter which restricts how many tokens a expert gets, but 
@@ -58,7 +66,7 @@ class Router(nn.Module):
             # assert self.step_ep not in self.expert_mask_per_step
             if self.step_ep % self.save_steps_router_stats or self.step_ep == 0:
                 self.expert_mask_per_step[self.step_ep] = expert_mask_full.cpu().to(torch.float32).detach() #.numpy().tolist()
-                self.step_ep += 1
+            self.step_ep += 1
             # with open("./expert_mask_per_step.json", 'w') as f:
             #     json.dump(self.expert_mask_per_step, f, indent=4)
         
@@ -133,7 +141,6 @@ class Router(nn.Module):
         else:
             router_logits = torch.einsum("lbnh, nh -> bl", hidden_states, self.weights)
        
-       
         if self.training:
             # Use the device from hidden_states to avoid issues with offloaded weights
             weights_device = hidden_states.device
@@ -146,14 +153,51 @@ class Router(nn.Module):
         temperature = self.router_temperature if self.router_temperature is not None else 1.0
         if temperature != 1.0:
             router_logits = router_logits / temperature
-        router_probs = torch.softmax(router_logits, dim=-1).to(router_logits.dtype)
+        
+        if self.learnable_gate and self.confidence_gate:
+            raise ValueError("learnable_gate and confidence_gate are mutually exclusive.")
+        
+        use_gate = self.force_reserve_layer and (self.learnable_gate or self.confidence_gate)
+        if use_gate:
+            # NOTE: calculate softmax **only over non-reserved layers**
+            # And assign the reserved layer a separate weight via: (i) a learnable gate or (ii) confidence-based gate.
+            reserve_idx = self.reserve_layer
+            if reserve_idx < 0:
+                reserve_idx = router_logits.shape[-1] + reserve_idx
+            # compute softmax over non-reserved layers only
+            masked_logits = router_logits.clone()
+            masked_logits[:, reserve_idx] = -1e9
+            non_reserved_probs = torch.softmax(masked_logits, dim=-1)
+
+            if self.learnable_gate:
+                # learn a separate gate for the reserved layer from its own hidden states
+                if self.reserve_gate is None:
+                    self.reserve_gate = nn.Linear(hidden_states.shape[-1], 1).to(
+                        device=hidden_states.device, dtype=hidden_states.dtype
+                    )
+                reserve_hidden = hidden_states[self.reserve_layer]  # [B, N, H]
+                pooled = reserve_hidden.mean(dim=1)  # [B, H]
+                gate_logits = self.reserve_gate(pooled).squeeze(-1)
+                reserve_layer_prob = torch.sigmoid(gate_logits)
+            else:
+                # confidence-based gate: higher confidence in non-reserved -> lower reserved weight.
+                conf = non_reserved_probs.max(dim=-1).values
+                reserve_layer_prob = torch.sigmoid(
+                    self.confidence_gate_slope * (self.confidence_gate_threshold - conf)
+                )
+
+            router_probs = non_reserved_probs * (1.0 - reserve_layer_prob).unsqueeze(-1)
+            router_probs[:, reserve_idx] = reserve_layer_prob
+            router_probs = router_probs.to(router_logits.dtype)
+        else:
+            router_probs = torch.softmax(router_logits, dim=-1).to(router_logits.dtype)
         
         if self.save_router_stats and self.training:
             # print("self.router_info : ", self.router_info)
             # import sys; sys.exit()
             if self.step_rp % self.save_steps_router_stats or self.step_rp == 0:
                 self.router_probs_per_step[self.step_rp] = router_probs.cpu().to(torch.float32).detach() #.numpy().tolist()
-                self.step_rp += 1
+            self.step_rp += 1
         # with open("/shared/nas2/sstoica2/MoL/router_probs_per_step.json", 'w') as f:
         #     json.dump(self.router_probs_per_step, f, indent=4)
         # print("router_probs.shape: ", router_probs.shape)
@@ -170,23 +214,33 @@ class Router(nn.Module):
 
         router_probs = router_probs.clone()
         if self.force_reserve_layer:
-            #router_probs[:, self.reserve_layer] = -1.0  # prevent the reserved layer from being selected for calculation of top-k
-            router_probs = self.cap_layer_prob(router_probs, 0, self.reserve_layer)
-        sorted_probs, sorted_idxs = torch.sort(router_probs, dim=-1, descending=True)
+            reserve_layer_prob = router_probs[:, self.reserve_layer]
+            # prevent the reserved layer from being selected for top-k,
+            # but keep its original probability for scaling.
+            router_probs_for_topk = router_probs.clone()
+            router_probs_for_topk[:, self.reserve_layer] = -1.0
+        else:
+            router_probs_for_topk = router_probs
+
+        sorted_probs, sorted_idxs = torch.sort(router_probs_for_topk, dim=-1, descending=True)
         probs = sorted_probs[:, :self.num_layers_to_choose]
         layers = sorted_idxs[:, :self.num_layers_to_choose]
         
         if self.force_reserve_layer:
-            reserve_layer_prob = router_probs[:, self.reserve_layer]
-            return layers, probs, reserve_layer_prob
+            # renormalize top-k probs to sum to (1 - reserve_layer_prob)
+            remaining_mass = (1.0 - reserve_layer_prob).clamp(min=0.0)
+            probs_sum = probs.sum(dim=-1, keepdim=True)
+            scale = torch.where(
+                probs_sum > 0,
+                remaining_mass.unsqueeze(-1) / probs_sum,
+                torch.zeros_like(probs_sum),
+            )
+            # NOTE: we are just adjusting the scale of probs to sum to (1 - reserve_layer_prob), 
+            # so that when we add the reserve_layer_prob later, the total sum is 1.
+            probs = probs * scale
+            return layers, probs, reserve_layer_prob  # [batch_size, k], [batch_size, k ], [batch_size ]
         
-        # build expert mask (top-k safe): [B, k, L] -> [B, L]
-        # NOTE: we don't use this expert_mask anymore
-        # expert_mask = F.one_hot(layers, num_classes=self.num_layers).float().sum(dim=1)
-        # # normalize so each row sums to 1 (important for top-k > 1) -> routing mass needs to be distributed to sum up to 1
-        # expert_mask = F.normalize(expert_mask, p=1, dim=-1)
-        
-        return layers, probs # [batch_size, num_layers_to_choose] x2, [batch_size, ], [batch_size, num_layers]
+        return layers, probs # [batch_size, k], [batch_size, k  ]
 
     def forward(self, hidden_states):
         """Produce the combine and dispatch tensors used for sending and
@@ -231,13 +285,7 @@ class Router(nn.Module):
     
 
 class TextConditionedRouter(Router):
-    """
-    
-    
-    TODO: This is still a work in progress - @JK
-    
-    
-    
+    """    
     Extension of the Router class above that conditions on input text to decide
     which layers to pick from the vision tower.
     """
@@ -360,38 +408,3 @@ class TextConditionedRouter(Router):
         assert image_features.ndim == 3
         return image_features
         
-        
-        
-
-
-# NOTE: Same logic as when self.num_layers == 23
-# class LayerAveragingRouter(nn.Module):
-#     '''
-#     Weighted averaging across layers with learnable weights.
-    
-#     '''
-    
-#     def __init__(self, num_layers: int, vision_feature_select_strategy: str = "default"):
-#         super().__init__()
-#         if num_layers < 2:
-#             raise ValueError("num_layers must be >= 2 to learn coefficients for layers 1..L-1.")
-#         self.num_layers = num_layers
-#         self.vision_feature_select_strategy = vision_feature_select_strategy
-#         self.layer_weights = nn.Parameter(torch.ones(num_layers - 1))
-
-#     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
-#         # hidden_states: [L, B, N, H]
-#         L, B, N, H = hidden_states.shape
-#         if L != self.num_layers:
-#             raise ValueError(f"Expected {self.num_layers} layers, got {L}.")
-
-#         coeffs = torch.cat([hidden_states.new_ones(1), self.layer_weights.to(hidden_states.dtype)])
-#         coeffs = coeffs.view(L, 1, 1, 1)
-#         image_feature = (hidden_states * coeffs).sum(dim=0) / L  # layerwise normalization
-
-#         if self.vision_feature_select_strategy == "patch":
-#             image_feature = image_feature[:, 1:, :]
-#         if self.vision_feature_select_strategy == "cls":
-#             image_feature = image_feature[:, 0, :]
-#         assert image_feature.ndim == 3
-#         return image_feature
