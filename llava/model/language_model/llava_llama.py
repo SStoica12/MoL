@@ -67,6 +67,7 @@ class LlavaLlamaForCausalLM(LlamaForCausalLM, LlavaMetaForCausalLM):
         output_hidden_states: Optional[bool] = None,
         images: Optional[torch.FloatTensor] = None,
         image_sizes: Optional[List[List[int]]] = None,
+        clip_texts: Optional[List[str]] = None,
         return_dict: Optional[bool] = None,
     ) -> Union[Tuple, CausalLMOutputWithPast]:
         # print("==================== I entered this forward ====================")
@@ -81,13 +82,14 @@ class LlavaLlamaForCausalLM(LlamaForCausalLM, LlavaMetaForCausalLM):
                 inputs_embeds,
                 labels
             ) = self.prepare_inputs_labels_for_multimodal(
-                input_ids,
-                position_ids,
-                attention_mask,
-                past_key_values,
-                labels,
-                images,
-                image_sizes
+                input_ids=input_ids,
+                position_ids=position_ids,
+                attention_mask=attention_mask,
+                past_key_values=past_key_values,
+                labels=labels,
+                images=images,
+                image_sizes=image_sizes,
+                clip_texts=clip_texts,
             )
         # if torch.is_tensor(inputs_embeds):
         #     print("inputs_embeds: ", inputs_embeds.shape)
@@ -167,7 +169,7 @@ class RouterLlavaLlamaForCausalLM(LlavaLlamaForCausalLM):
         self.load_balance_alpha = load_balance_alpha
     def get_model(self):
         return self.model
-    def encode_images(self, images):
+    def encode_images(self, images, text_embeds=None, text_attention_mask=None):
         print("--------- I AM IN MOL ROUTER ENCODE IMAGES ---------")
         vision_tower = self.get_model().get_vision_tower().vision_tower
         device = vision_tower.device
@@ -181,7 +183,11 @@ class RouterLlavaLlamaForCausalLM(LlavaLlamaForCausalLM):
 
         hidden_states = torch.stack(list(image_forward_outs.hidden_states)) # [num_layers, batch_size, num_image_tokens, vision_hidden_dim]
         assert hidden_states.ndim == 4
-        image_features = self.router(hidden_states[1:, :, :, :]) # do not want to include the embedding layer
+        image_features = self.router(
+            hidden_states[1:, :, :, :],
+            text_embeds=text_embeds,
+            text_attention_mask=text_attention_mask,
+        ) # do not want to include the embedding layer
         assert image_features.requires_grad == True
         # import pdb; pdb.set_trace()
         image_features = self.get_model().mm_projector(image_features) # image_features.requires_grad = True

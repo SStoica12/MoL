@@ -31,7 +31,7 @@ import tokenizers
 from llava.constants import IGNORE_INDEX, IMAGE_TOKEN_INDEX, DEFAULT_IMAGE_TOKEN, DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN
 from torch.utils.data import Dataset
 from llava.train.llava_trainer import RouterLLaVATrainer
-from llava.model.router import Router
+from llava.model.router import Router, TextConditionedRouter, TextOnlyRouter
 from llava import conversation as conversation_lib
 from llava.model import *
 from llava.mm_utils import tokenizer_image_token
@@ -70,6 +70,10 @@ class ModelArguments:
     mm_vision_select_feature: Optional[str] = field(default="patch")
     num_layers_to_choose: Optional[int] = field(default=1)
     mm_use_text_enc: Optional[bool] = True
+    use_text_conditioned_router: bool = False
+    use_text_only_gating: bool = False
+    text_pool: Optional[str] = "mean"
+    text_scale: float = 1.0
     force_reserve_layer: bool = False
     reserve_layer : int = -2
     save_router_stats : bool = True
@@ -602,6 +606,7 @@ def preprocess_llama_2(
     return dict(
         input_ids=input_ids,
         labels=targets,
+        clip_texts=conversations,
     )
 
 
@@ -688,6 +693,7 @@ def preprocess_v1(
     return dict(
         input_ids=input_ids,
         labels=targets,
+        clip_texts=conversations,
     )
 
 
@@ -776,6 +782,7 @@ def preprocess_mpt(
     return dict(
         input_ids=input_ids,
         labels=targets,
+        clip_texts=conversations,
     )
 
 
@@ -798,7 +805,7 @@ def preprocess_plain(
         tokenized_len = len(tokenizer_image_token(source[0]['value'], tokenizer))
         target[:tokenized_len] = IGNORE_INDEX
 
-    return dict(input_ids=input_ids, labels=targets)
+    return dict(input_ids=input_ids, labels=targets, clip_texts=conversations)
 
 
 def preprocess(
@@ -846,7 +853,7 @@ def preprocess(
         speakers = [sentence["from"] for sentence in source]
         _mask_targets(target, tokenized_lens, speakers)
 
-    return dict(input_ids=input_ids, labels=targets)
+    return dict(input_ids=input_ids, labels=targets, clip_texts=conversations)
 
 def get_base_model(model_path, model_base, load_in_4bit, load_in_8bit, device_map):
     try:
@@ -935,8 +942,11 @@ class LazySupervisedDataset(Dataset):
             self.tokenizer,
             has_image=('image' in self.list_data_dict[i]))
         if isinstance(i, int):
+            clip_text = data_dict.get("clip_texts", None)
             data_dict = dict(input_ids=data_dict["input_ids"][0],
                              labels=data_dict["labels"][0])
+            if clip_text is not None:
+                data_dict["clip_texts"] = clip_text[0]
 
         # image exist in the data
         if 'image' in self.list_data_dict[i]:
@@ -971,6 +981,9 @@ class DataCollatorForSupervisedDataset(object):
             labels=labels,
             attention_mask=input_ids.ne(self.tokenizer.pad_token_id),
         )
+
+        if 'clip_texts' in instances[0]:
+            batch['clip_texts'] = [instance['clip_texts'] for instance in instances]
 
         if 'image' in instances[0]:
             images = [instance['image'] for instance in instances]
@@ -1141,6 +1154,19 @@ def train(attn_implementation=None):
         model.config.confidence_gate = model_args.confidence_gate
         model.config.confidence_gate_threshold = model_args.confidence_gate_threshold
         model.config.confidence_gate_slope = model_args.confidence_gate_slope
+        model.config.use_text_conditioned_router = model_args.use_text_conditioned_router
+        model.config.use_text_only_gating = model_args.use_text_only_gating
+        if model_args.use_text_conditioned_router and model_args.use_text_only_gating:
+            raise ValueError("use_text_conditioned_router and use_text_only_gating are mutually exclusive.")
+        if (model_args.use_text_conditioned_router or model_args.use_text_only_gating) and getattr(model.config, "mm_text_hidden_size", None) is None:
+            text_hidden_size = getattr(model.config, "hidden_size", None)
+            if text_hidden_size is None:
+                text_hidden_size = getattr(model.config, "d_model", None)
+            if text_hidden_size is None and hasattr(model.get_model(), "embed_tokens"):
+                text_hidden_size = model.get_model().embed_tokens.weight.shape[1]
+            if text_hidden_size is None:
+                raise ValueError("Unable to infer text hidden size for TextConditionedRouter.")
+            model.config.mm_text_hidden_size = text_hidden_size
         
         image_size = vision_tower.vision_tower.config.image_size
         patch_size = vision_tower.vision_tower.config.patch_size
@@ -1148,17 +1174,55 @@ def train(attn_implementation=None):
         num_image_tokens = (image_size // patch_size)**2 + 1
         router_weights = torch.zeros((num_image_tokens, hidden_size)).to(dtype=torch.bfloat16 if training_args.bf16 else torch.float16, device=training_args.device)
         # print("model.config.mm_vision_select_feature: ", model.config.mm_vision_select_feature) # patch
-        # TODO: implement condition for textrouter vs. router
-        model.router = Router(
-            model.config,
-            router_weights,
-            model.config.mm_vision_select_feature,
-            training_args.load_balancing_alpha,
-            learnable_gate=model_args.learnable_gate,
-            confidence_gate=model_args.confidence_gate,
-            confidence_gate_threshold=model_args.confidence_gate_threshold,
-            confidence_gate_slope=model_args.confidence_gate_slope,
-        )
+
+        # router type
+        if model_args.use_text_only_gating:
+            router_cls = TextOnlyRouter
+        elif model_args.use_text_conditioned_router:
+            router_cls = TextConditionedRouter
+        else:
+            router_cls = Router
+        if model_args.use_text_conditioned_router:
+            model.router = router_cls(
+                model.config,
+                router_weights,
+                model.config.mm_vision_select_feature,
+                training_args.load_balancing_alpha,
+                text_pool=model_args.text_pool,
+                text_scale=model_args.text_scale,
+                force_reserve_layer=model_args.force_reserve_layer,
+                reserve_layer=model_args.reserve_layer,
+                learnable_gate=model_args.learnable_gate,
+                confidence_gate=model_args.confidence_gate,
+                confidence_gate_threshold=model_args.confidence_gate_threshold,
+                confidence_gate_slope=model_args.confidence_gate_slope,
+            )
+        elif model_args.use_text_only_gating:
+            model.router = router_cls(
+                model.config,
+                router_weights,
+                model.config.mm_vision_select_feature,
+                training_args.load_balancing_alpha,
+                text_pool=model_args.text_pool,
+                text_scale=model_args.text_scale,
+                force_reserve_layer=model_args.force_reserve_layer,
+                reserve_layer=model_args.reserve_layer,
+                learnable_gate=model_args.learnable_gate,
+                confidence_gate=model_args.confidence_gate,
+                confidence_gate_threshold=model_args.confidence_gate_threshold,
+                confidence_gate_slope=model_args.confidence_gate_slope,
+            )
+        else:
+            model.router = router_cls(
+                model.config,
+                router_weights,
+                model.config.mm_vision_select_feature,
+                training_args.load_balancing_alpha,
+                learnable_gate=model_args.learnable_gate,
+                confidence_gate=model_args.confidence_gate,
+                confidence_gate_threshold=model_args.confidence_gate_threshold,
+                confidence_gate_slope=model_args.confidence_gate_slope,
+            )
         # chooses which layers to apply the router 
         model.router.num_layers_to_choose = model_args.num_layers_to_choose
         model.router.force_reserve_layer = model_args.force_reserve_layer
@@ -1176,6 +1240,17 @@ def train(attn_implementation=None):
         if model.router.learnable_gate and model.router.reserve_gate is None:
             model.router.reserve_gate = torch.nn.Linear(hidden_size, 1).to(device=training_args.device)
         model.router.requires_grad_(True) # we need to learn the router
+        if model_args.use_text_only_gating:
+            num_layers = getattr(vision_tower.vision_tower.config, "num_hidden_layers", None)
+            if num_layers is None and hasattr(vision_tower.vision_tower, "vision_model"):
+                num_layers = len(vision_tower.vision_tower.vision_model.encoder.layers)
+            if num_layers is None:
+                raise ValueError("Unable to infer vision layer count for TextOnlyRouter.")
+            model.router._maybe_init_text_router(
+                num_layers,
+                device=training_args.device,
+                dtype=router_weights.dtype,
+            )
 
         # replace zero weights with learned router weights
         if model_args.pretrain_mm_mlp_adapter is not None:

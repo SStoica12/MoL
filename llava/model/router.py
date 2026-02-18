@@ -297,8 +297,25 @@ class TextConditionedRouter(Router):
         load_balancing_alpha=0.01,
         text_pool: str = "mean",
         text_scale: float = 1.0, # overall influence of text. Would this allow us to better modulate the features. hyperparam sweep
+        force_reserve_layer: bool = False,
+        reserve_layer: int = -2,
+        learnable_gate: bool = False,
+        confidence_gate: bool = False,
+        confidence_gate_threshold: float = 0.6,
+        confidence_gate_slope: float = 10.0,
     ):
-        super().__init__(config, weights, top_k, load_balancing_alpha)
+        super().__init__(
+            config,
+            weights,
+            top_k,
+            load_balancing_alpha,
+            force_reserve_layer=force_reserve_layer,
+            reserve_layer=reserve_layer,
+            learnable_gate=learnable_gate,
+            confidence_gate=confidence_gate,
+            confidence_gate_threshold=confidence_gate_threshold,
+            confidence_gate_slope=confidence_gate_slope,
+        )
         self.text_pool = text_pool
         self.text_scale = text_scale
         self.vision_hidden_size = self._infer_vision_hidden_size(config, weights)
@@ -308,8 +325,14 @@ class TextConditionedRouter(Router):
                 "Pass weights with a valid shape or provide config.mm_hidden_size/"
                 "config.vision_config.hidden_size."
             )
+        self.text_hidden_size = self._infer_text_hidden_size(config)
+        if self.text_hidden_size is None:
+            raise ValueError(
+                "Unable to infer text hidden size for TextConditionedRouter. "
+                "Provide config.mm_text_hidden_size or config.text_config.hidden_size."
+            )
         # Map pooled text embedding -> FiLM (gamma, beta) for vision hidden size.
-        self.text_to_film = nn.LazyLinear(self.vision_hidden_size * 2)  # TODO: check the hidden_state size from text tower
+        self.text_to_film = nn.Linear(self.text_hidden_size, self.vision_hidden_size * 2)
 
     def _infer_vision_hidden_size(self, config, weights):
         if weights is not None and weights.ndim == 2 and weights.numel() > 0:
@@ -321,6 +344,18 @@ class TextConditionedRouter(Router):
         vision_config = getattr(config, "vision_config", None)
         if vision_config is not None:
             value = getattr(vision_config, "hidden_size", None)
+            if value is not None:
+                return value
+        return None
+
+    def _infer_text_hidden_size(self, config):
+        for name in ("mm_text_hidden_size", "text_hidden_size"):
+            value = getattr(config, name, None)
+            if value is not None:
+                return value
+        text_config = getattr(config, "text_config", None)
+        if text_config is not None:
+            value = getattr(text_config, "hidden_size", None)
             if value is not None:
                 return value
         return None
@@ -383,7 +418,7 @@ class TextConditionedRouter(Router):
             layers, probs = self.get_layer_and_scaling_probs(router_probs)
 
         hidden_states = hidden_states.transpose(0, 1)
-        layers = layers.reshape(B, -1, 1, 1).expand(B, k, N, H) # [B, k, N, H]     
+        layers = layers.reshape(B, -1, 1, 1).expand(B, k, N, H) # [B, k, N, H]        
         hidden_states_chosen = torch.gather(hidden_states, 1, layers)  # [B, k, N, H]     
         if self.force_reserve_layer:
             reserve_hidden_state = hidden_states[:, self.reserve_layer, :, :].unsqueeze(1) # [B, 1, N, H]
@@ -401,6 +436,203 @@ class TextConditionedRouter(Router):
             image_features = image_features + reserve_layer_prob.reshape(B, -1, 1, 1) * reserve_hidden_state # [B, 1, N, H]
 
         image_features = image_features.squeeze(1) # [B, N, H]
+        if self.vision_feature_select_strategy == "patch": 
+            image_features = image_features[:, 1:, :]
+        if self.vision_feature_select_strategy == "cls": 
+            image_features = image_features[:, 0, :]
+        assert image_features.ndim == 3
+        return image_features
+
+
+class TextOnlyRouter(Router):
+    """    
+    Router that computes layer logits from pooled text embeddings only.
+    """
+    def __init__(
+        self,
+        config,
+        weights,
+        top_k=1,
+        load_balancing_alpha=0.01,
+        text_pool: str = "mean",
+        text_scale: float = 1.0,
+        force_reserve_layer: bool = False,
+        reserve_layer: int = -2,
+        learnable_gate: bool = False,
+        confidence_gate: bool = False,
+        confidence_gate_threshold: float = 0.6,
+        confidence_gate_slope: float = 10.0,
+    ):
+        super().__init__(
+            config,
+            weights,
+            top_k,
+            load_balancing_alpha,
+            force_reserve_layer=force_reserve_layer,
+            reserve_layer=reserve_layer,
+            learnable_gate=learnable_gate,
+            confidence_gate=confidence_gate,
+            confidence_gate_threshold=confidence_gate_threshold,
+            confidence_gate_slope=confidence_gate_slope,
+        )
+        self.text_pool = text_pool
+        self.text_scale = text_scale
+        self.text_hidden_size = self._infer_text_hidden_size(config)
+        if self.text_hidden_size is None:
+            raise ValueError(
+                "Unable to infer text hidden size for TextOnlyRouter. "
+                "Provide config.mm_text_hidden_size or config.text_config.hidden_size."
+            )
+        self.text_to_router = None
+        if self.learnable_gate:
+            # Reserve gate uses text summary, not vision hidden states.
+            self.reserve_gate = nn.Linear(self.text_hidden_size, 1)
+    
+    def _maybe_init_text_router(self, num_layers, device=None, dtype=None):
+        if self.text_to_router is None or self.text_to_router.out_features != num_layers:
+            self.text_to_router = nn.Linear(self.text_hidden_size, num_layers)
+            if device is not None or dtype is not None:
+                self.text_to_router = self.text_to_router.to(device=device, dtype=dtype)
+
+    def _infer_text_hidden_size(self, config):
+        for name in ("mm_text_hidden_size", "text_hidden_size"):
+            value = getattr(config, name, None)
+            if value is not None:
+                return value
+        text_config = getattr(config, "text_config", None)
+        if text_config is not None:
+            value = getattr(text_config, "hidden_size", None)
+            if value is not None:
+                return value
+        return None
+
+    def _pool_text(self, text_embeds, text_attention_mask):
+        # Accept already pooled text embeddings (B, H)
+        if text_embeds.ndim == 2:
+            return text_embeds
+        if text_embeds.ndim != 3:
+            raise ValueError(f"Expected text_embeds of shape [B, T, H], got {text_embeds.shape}")
+
+        if self.text_pool == "cls":
+            return text_embeds[:, 0, :]
+
+        if text_attention_mask is None:
+            return text_embeds.mean(dim=1)
+
+        mask = text_attention_mask.to(dtype=text_embeds.dtype)
+        if mask.ndim == 2:
+            mask = mask.unsqueeze(-1)
+        denom = mask.sum(dim=1).clamp(min=1)
+        return (text_embeds * mask).sum(dim=1) / denom
+
+    def router_probs(self, hidden_states, text_embeds=None, text_attention_mask=None):
+        if text_embeds is None:
+            batch_size = hidden_states.shape[1]
+            text_summary = torch.zeros(
+                (batch_size, self.text_hidden_size),
+                device=hidden_states.device,
+                dtype=hidden_states.dtype,
+            )
+        else:
+            text_summary = self._pool_text(text_embeds, text_attention_mask).to(
+                device=hidden_states.device, dtype=hidden_states.dtype
+            )
+
+        if self.text_scale is not None:
+            text_summary = text_summary * self.text_scale
+
+        num_layers = hidden_states.shape[0]
+        self._maybe_init_text_router(
+            num_layers,
+            device=hidden_states.device,
+            dtype=hidden_states.dtype,
+        )
+
+        router_logits = self.text_to_router(text_summary)
+
+        if self.training:
+            random_noise = torch.rand(router_logits.shape, device=hidden_states.device)
+            router_logits += random_noise
+
+        router_logits = router_logits.to(torch.float32)
+
+        temperature = self.router_temperature if self.router_temperature is not None else 1.0
+        if temperature != 1.0:
+            router_logits = router_logits / temperature
+
+        if self.learnable_gate and self.confidence_gate:
+            raise ValueError("learnable_gate and confidence_gate are mutually exclusive.")
+
+        use_gate = self.force_reserve_layer and (self.learnable_gate or self.confidence_gate)
+        if use_gate:
+            reserve_idx = self.reserve_layer
+            if reserve_idx < 0:
+                reserve_idx = router_logits.shape[-1] + reserve_idx
+            masked_logits = router_logits.clone()
+            masked_logits[:, reserve_idx] = -1e9
+            non_reserved_probs = torch.softmax(masked_logits, dim=-1)
+
+            if self.learnable_gate:
+                if self.reserve_gate is None or self.reserve_gate.in_features != self.text_hidden_size:
+                    self.reserve_gate = nn.Linear(self.text_hidden_size, 1).to(
+                        device=hidden_states.device, dtype=hidden_states.dtype
+                    )
+                gate_logits = self.reserve_gate(text_summary).squeeze(-1)
+                reserve_layer_prob = torch.sigmoid(gate_logits)
+            else:
+                conf = non_reserved_probs.max(dim=-1).values
+                reserve_layer_prob = torch.sigmoid(
+                    self.confidence_gate_slope * (self.confidence_gate_threshold - conf)
+                )
+
+            router_probs = non_reserved_probs * (1.0 - reserve_layer_prob).unsqueeze(-1)
+            router_probs[:, reserve_idx] = reserve_layer_prob
+            router_probs = router_probs.to(router_logits.dtype)
+        else:
+            router_probs = torch.softmax(router_logits, dim=-1).to(router_logits.dtype)
+
+        if self.save_router_stats and self.training:
+            if self.step_rp % self.save_steps_router_stats or self.step_rp == 0:
+                self.router_probs_per_step[self.step_rp] = router_probs.cpu().to(torch.float32).detach()
+            self.step_rp += 1
+
+        if self.cap_softmax:
+            router_probs = self.cap_layer_prob(router_probs, self.cap_softmax_value, self.reserve_layer)
+        return router_probs
+
+    def forward(self, hidden_states, text_embeds=None, text_attention_mask=None):
+        """Route vision layers using pooled text embeddings only.
+
+        Args:
+            hidden_states: [L, B, N, H] vision hidden states.
+            text_embeds: [B, T, H_text] or [B, H_text] text embeddings.
+            text_attention_mask: [B, T] attention mask for pooling.
+        """
+        L, B, N, H = hidden_states.shape
+        k = self.num_layers_to_choose
+        self.num_layers = L
+        router_probs = self.router_probs(hidden_states, text_embeds, text_attention_mask)
+        if self.force_reserve_layer:
+            layers, probs, reserve_layer_prob = self.get_layer_and_scaling_probs(router_probs)
+        else:
+            layers, probs = self.get_layer_and_scaling_probs(router_probs)
+
+        hidden_states = hidden_states.transpose(0, 1)
+        layers = layers.reshape(B, -1, 1, 1).expand(B, k, N, H) # [B, k, N, H]
+        hidden_states_chosen = torch.gather(hidden_states, 1, layers)  # [B, k, N, H]
+        if self.force_reserve_layer:
+            reserve_hidden_state = hidden_states[:, self.reserve_layer, :, :].unsqueeze(1) # [B, 1, N, H]
+
+        probs = probs.to(hidden_states_chosen.dtype)
+        image_features = probs.reshape(B, -1, 1, 1) * hidden_states_chosen
+        if k > 1:
+            image_features = image_features.sum(dim=1, keepdim=True)
+
+        if self.force_reserve_layer:
+            reserve_layer_prob = reserve_layer_prob.to(hidden_states_chosen.dtype)
+            image_features = image_features + reserve_layer_prob.reshape(B, -1, 1, 1) * reserve_hidden_state
+
+        image_features = image_features.squeeze(1)
         if self.vision_feature_select_strategy == "patch": 
             image_features = image_features[:, 1:, :]
         if self.vision_feature_select_strategy == "cls": 

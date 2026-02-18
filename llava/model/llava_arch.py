@@ -73,6 +73,8 @@ class LlavaMetaModel:
         self.config.use_mm_proj = True
         self.config.mm_projector_type = getattr(model_args, 'mm_projector_type', 'linear')
         self.config.mm_hidden_size = vision_tower.hidden_size
+        if getattr(self.config, "mm_use_text_enc", False) and hasattr(vision_tower, "get_text_tower"):
+            self.config.mm_text_hidden_size = vision_tower.get_text_tower().config.hidden_size
         self.config.mm_vision_select_layer = mm_vision_select_layer
         self.config.mm_vision_select_feature = mm_vision_select_feature
         self.config.mm_patch_merge_type = mm_patch_merge_type
@@ -153,7 +155,7 @@ class LlavaMetaForCausalLM(ABC):
     def get_vision_tower(self):
         return self.get_model().get_vision_tower()
 
-    def encode_images(self, images):
+    def encode_images(self, images, text_embeds=None, text_attention_mask=None):
         image_features = self.get_model().get_vision_tower()(images) # image_features.requires_grad = False <-- this is why gradients are zero for scaling coefs
         assert image_features.requires_grad == True
         # import pdb; pdb.set_trace()
@@ -161,18 +163,71 @@ class LlavaMetaForCausalLM(ABC):
         return image_features
 
     def prepare_inputs_labels_for_multimodal(
-        self, input_ids, position_ids, attention_mask, past_key_values, labels,
-        images, image_sizes=None
+        self,
+        input_ids,
+        position_ids=None,
+        attention_mask=None,
+        past_key_values=None,
+        labels=None,
+        images=None,
+        image_sizes=None,
+        clip_texts=None,
     ):
         vision_tower = self.get_vision_tower()
         if vision_tower is None or images is None or input_ids.shape[1] == 1:
             return input_ids, position_ids, attention_mask, past_key_values, None, labels
 
+        text_embeds = None
+        text_attention_mask = None
+        if getattr(self.config, "use_text_conditioned_router", False) or getattr(self.config, "use_text_only_gating", False):
+            # breakpoint() - TODO: Why isn't `use_clip_text` set to True?
+            use_clip_text = (
+                clip_texts is not None
+                and hasattr(vision_tower, "text_tokenizer")
+                and hasattr(vision_tower, "encode_text")
+            )
+            if use_clip_text:
+                def _sanitize_clip_text(text):
+                    if text is None:
+                        return ""
+                    text = text.replace(DEFAULT_IM_START_TOKEN, " ")
+                    text = text.replace(DEFAULT_IM_END_TOKEN, " ")
+                    text = text.replace(DEFAULT_IMAGE_PATCH_TOKEN, " ")
+                    return " ".join(text.split())
+
+                clip_texts = [_sanitize_clip_text(t) for t in clip_texts]
+                clip_tokens = vision_tower.text_tokenizer(
+                    clip_texts,
+                    return_tensors="pt",
+                    padding=True,
+                    truncation=True,
+                )
+                clip_input_ids = clip_tokens["input_ids"].to(device=vision_tower.device)
+                clip_attention_mask = clip_tokens.get("attention_mask", None)
+                if clip_attention_mask is not None:
+                    clip_attention_mask = clip_attention_mask.to(device=vision_tower.device)
+                with torch.no_grad():
+                    text_embeds = vision_tower.encode_text(clip_input_ids, clip_attention_mask)
+                text_attention_mask = clip_attention_mask
+            else:
+                # fallback to LLM embeddings instead of CLIPTextModel embeddings if CLIP text encoder is not available or clip_texts is None
+                if attention_mask is None:
+                    attention_mask = torch.ones_like(input_ids, dtype=torch.bool)
+                text_attention_mask = attention_mask.bool()
+                text_attention_mask = text_attention_mask & (input_ids != IMAGE_TOKEN_INDEX)
+                pad_id = getattr(self.config, "pad_token_id", 0)
+                safe_input_ids = input_ids.clone()
+                safe_input_ids[safe_input_ids == IMAGE_TOKEN_INDEX] = pad_id
+                text_embeds = self.get_model().embed_tokens(safe_input_ids)
+                # text_embeds = self.get_model().embed_tokens(input_ids)
+
         if type(images) is list or images.ndim == 5:
             if type(images) is list:
                 images = [x.unsqueeze(0) if x.ndim == 3 else x for x in images]
             concat_images = torch.cat([image for image in images], dim=0)
-            image_features = self.encode_images(concat_images)
+            image_features = self.encode_images(
+                concat_images, text_embeds=text_embeds, text_attention_mask=text_attention_mask
+            )
             split_sizes = [image.shape[0] for image in images]
             image_features = torch.split(image_features, split_sizes, dim=0)
             mm_patch_merge_type = getattr(self.config, 'mm_patch_merge_type', 'flat')
@@ -217,7 +272,9 @@ class LlavaMetaForCausalLM(ABC):
             else:
                 raise ValueError(f"Unexpected mm_patch_merge_type: {self.config.mm_patch_merge_type}")
         else:
-            image_features = self.encode_images(images)
+            image_features = self.encode_images(
+                images, text_embeds=text_embeds, text_attention_mask=text_attention_mask
+            )
 
         # TODO: image start / end is not implemented here to support pretraining.
         if getattr(self.config, 'tune_mm_mlp_adapter', False) and getattr(self.config, 'mm_use_im_start_end', False):

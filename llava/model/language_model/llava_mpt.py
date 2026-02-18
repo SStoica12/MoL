@@ -13,7 +13,7 @@
 #    limitations under the License.
 
 
-from typing import Optional, Tuple
+from typing import Optional, Tuple, List
 
 import torch
 
@@ -70,9 +70,19 @@ class LlavaMptForCausalLM(MptForCausalLM, LlavaMetaForCausalLM):
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
-        images=None):
+        images=None,
+        clip_texts: Optional[List[str]] = None):
 
-        input_ids, attention_mask, past_key_values, inputs_embeds, labels = self.prepare_inputs_labels_for_multimodal(input_ids, attention_mask, past_key_values, labels, images)
+        input_ids, position_ids, attention_mask, past_key_values, inputs_embeds, labels = self.prepare_inputs_labels_for_multimodal(
+            input_ids=input_ids,
+            position_ids=None,
+            attention_mask=attention_mask,
+            past_key_values=past_key_values,
+            labels=labels,
+            images=images,
+            image_sizes=None,
+            clip_texts=clip_texts,
+        )
         
         return super().forward(
             input_ids,
@@ -101,7 +111,7 @@ class RouterLlavaMptForCausalLM(LlavaMptForCausalLM):
         self.load_balance_alpha = load_balance_alpha
     def get_model(self):
         return self.model
-    def encode_images(self, images):
+    def encode_images(self, images, text_embeds=None, text_attention_mask=None):
         print("--------- I AM IN ROUTER ENCODE IMAGES ---------")
         vision_tower = self.get_model().get_vision_tower().vision_tower
         device = vision_tower.device
@@ -115,7 +125,11 @@ class RouterLlavaMptForCausalLM(LlavaMptForCausalLM):
 
         hidden_states = torch.stack(list(image_forward_outs.hidden_states)) # [num_layers, batch_size, num_image_tokens, vision_hidden_dim]
         assert hidden_states.ndim == 4
-        image_features = self.router(hidden_states[1:, :, :, :]) # do not want to include the embedding layer
+        image_features = self.router(
+            hidden_states[1:, :, :, :],
+            text_embeds=text_embeds,
+            text_attention_mask=text_attention_mask,
+        ) # do not want to include the embedding layer
         assert image_features.requires_grad == True
         # import pdb; pdb.set_trace()
         image_features = self.get_model().mm_projector(image_features) # image_features.requires_grad = True
