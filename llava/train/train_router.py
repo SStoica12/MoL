@@ -74,6 +74,10 @@ class ModelArguments:
     use_text_only_gating: bool = False
     text_pool: Optional[str] = "mean"
     text_scale: float = 1.0
+    text_conditioning: Optional[str] = "film"
+    text_attention_type: Optional[str] = "concat"
+    text_attention_dim: Optional[int] = 1024
+    attn_level: Optional[str] = "layer"
     force_reserve_layer: bool = False
     reserve_layer : int = -2
     save_router_stats : bool = True
@@ -1156,6 +1160,10 @@ def train(attn_implementation=None):
         model.config.confidence_gate_slope = model_args.confidence_gate_slope
         model.config.use_text_conditioned_router = model_args.use_text_conditioned_router
         model.config.use_text_only_gating = model_args.use_text_only_gating
+        model.config.text_conditioning = model_args.text_conditioning
+        model.config.text_attention_type = model_args.text_attention_type
+        model.config.text_attention_dim = model_args.text_attention_dim
+        model.config.attn_level = model_args.attn_level
         if model_args.use_text_conditioned_router and model_args.use_text_only_gating:
             raise ValueError("use_text_conditioned_router and use_text_only_gating are mutually exclusive.")
         if (model_args.use_text_conditioned_router or model_args.use_text_only_gating) and getattr(model.config, "mm_text_hidden_size", None) is None:
@@ -1190,6 +1198,10 @@ def train(attn_implementation=None):
                 training_args.load_balancing_alpha,
                 text_pool=model_args.text_pool,
                 text_scale=model_args.text_scale,
+                text_conditioning=model_args.text_conditioning,
+                text_attention_type=model_args.text_attention_type,
+                text_attention_dim=model_args.text_attention_dim,
+                attn_level=model_args.attn_level,
                 force_reserve_layer=model_args.force_reserve_layer,
                 reserve_layer=model_args.reserve_layer,
                 learnable_gate=model_args.learnable_gate,

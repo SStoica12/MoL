@@ -1,3 +1,4 @@
+import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -297,6 +298,10 @@ class TextConditionedRouter(Router):
         load_balancing_alpha=0.01,
         text_pool: str = "mean",
         text_scale: float = 1.0, # overall influence of text. Would this allow us to better modulate the features. hyperparam sweep
+        text_conditioning: str = "film", # "film" or "attention"
+        text_attention_type: str = "concat", # "concat" or "qk"
+        text_attention_dim: Optional[int] = None,
+        attn_level: str = "layer", # "token" or "layer" (used when text_conditioning == "attention")
         force_reserve_layer: bool = False,
         reserve_layer: int = -2,
         learnable_gate: bool = False,
@@ -318,6 +323,9 @@ class TextConditionedRouter(Router):
         )
         self.text_pool = text_pool
         self.text_scale = text_scale
+        self.text_conditioning = text_conditioning
+        self.text_attention_type = text_attention_type
+        self.attn_level = attn_level
         self.vision_hidden_size = self._infer_vision_hidden_size(config, weights)
         if self.vision_hidden_size is None:
             raise ValueError(
@@ -331,8 +339,35 @@ class TextConditionedRouter(Router):
                 "Unable to infer text hidden size for TextConditionedRouter. "
                 "Provide config.mm_text_hidden_size or config.text_config.hidden_size."
             )
-        # Map pooled text embedding -> FiLM (gamma, beta) for vision hidden size.
-        self.text_to_film = nn.Linear(self.text_hidden_size, self.vision_hidden_size * 2)
+        # Conditioning modules.
+        if self.text_conditioning not in ("film", "attention", "attn"):
+            raise ValueError(f"Unknown text_conditioning: {self.text_conditioning}")
+        if self.attn_level not in ("token", "layer"):
+            raise ValueError(f"Unknown attn_level: {self.attn_level}")
+        if self.text_conditioning == "film":
+            # Map pooled text embedding -> FiLM (gamma, beta) for vision hidden size.
+            self.text_to_film = nn.Linear(self.text_hidden_size, self.vision_hidden_size * 2)
+            self.text_attn_mlp = None
+            self.text_attn_q = None
+            self.text_attn_k = None
+            self.text_attn_scale = None
+        else:
+            self.text_to_film = None
+            if self.text_attention_type not in ("concat", "qk"):
+                raise ValueError(f"Unknown text_attention_type: {self.text_attention_type}")
+            if self.text_attention_type == "concat":
+                # Compatibility score from concatenated [text || token] features.
+                self.text_attn_mlp = nn.Linear(self.text_hidden_size + self.vision_hidden_size, 1)
+                self.text_attn_q = None
+                self.text_attn_k = None
+                self.text_attn_scale = None
+            else:
+                # Project text as query and vision tokens as keys.
+                self.text_attn_dim = text_attention_dim or self.vision_hidden_size
+                self.text_attn_q = nn.Linear(self.text_hidden_size, self.text_attn_dim)
+                self.text_attn_k = nn.Linear(self.vision_hidden_size, self.text_attn_dim)
+                self.text_attn_scale = 1.0 / math.sqrt(self.text_attn_dim)
+                self.text_attn_mlp = None
 
     def _infer_vision_hidden_size(self, config, weights):
         if weights is not None and weights.ndim == 2 and weights.numel() > 0:
@@ -379,7 +414,7 @@ class TextConditionedRouter(Router):
         denom = mask.sum(dim=1).clamp(min=1)
         return (text_embeds * mask).sum(dim=1) / denom
 
-    def _condition_hidden_states(self, hidden_states, text_embeds, text_attention_mask):
+    def _condition_hidden_states_film(self, hidden_states, text_embeds, text_attention_mask):
         text_summary = self._pool_text(text_embeds, text_attention_mask).to(
             device=hidden_states.device, dtype=hidden_states.dtype
         )
@@ -391,6 +426,50 @@ class TextConditionedRouter(Router):
         gamma = gamma.unsqueeze(0).unsqueeze(2)
         beta = beta.unsqueeze(0).unsqueeze(2)
         return hidden_states * (1 + gamma) + beta
+
+    def _condition_hidden_states_attention(self, hidden_states, text_embeds, text_attention_mask):
+        text_summary = self._pool_text(text_embeds, text_attention_mask).to(
+            device=hidden_states.device, dtype=hidden_states.dtype
+        )
+        if self.text_scale is not None:
+            text_summary = text_summary * self.text_scale
+
+        if self.attn_level == "token":
+            if self.text_attention_type == "concat":
+                # [L, B, N, H_text]
+                text_expanded = text_summary.unsqueeze(0).unsqueeze(2)
+                text_expanded = text_expanded.expand(
+                    hidden_states.shape[0], -1, hidden_states.shape[2], -1
+                )
+                concat = torch.cat([hidden_states, text_expanded], dim=-1)
+                scores = self.text_attn_mlp(concat).squeeze(-1)  # [L, B, N]
+            else:
+                q = self.text_attn_q(text_summary)  # [B, D]
+                k = self.text_attn_k(hidden_states)  # [L, B, N, D]
+                scores = (k * q.unsqueeze(0).unsqueeze(2)).sum(dim=-1) * self.text_attn_scale
+
+            attn = torch.softmax(scores, dim=-1).to(dtype=hidden_states.dtype)
+            return hidden_states * attn.unsqueeze(-1)
+
+        # Layer-level attention.
+        layer_summary = hidden_states.mean(dim=2)  # [L, B, H]
+        if self.text_attention_type == "concat":
+            text_expanded = text_summary.unsqueeze(0).expand(layer_summary.shape[0], -1, -1)
+            concat = torch.cat([layer_summary, text_expanded], dim=-1)
+            scores = self.text_attn_mlp(concat).squeeze(-1)  # [L, B]
+        else:
+            q = self.text_attn_q(text_summary)  # [B, D]
+            k = self.text_attn_k(layer_summary)  # [L, B, D]
+            scores = (k * q.unsqueeze(0)).sum(dim=-1) * self.text_attn_scale  # [L, B]
+
+        # Normalize across layers, then scale each layer's tokens.
+        attn = torch.softmax(scores, dim=0).to(dtype=hidden_states.dtype)  # [L, B]
+        return hidden_states * attn.unsqueeze(-1).unsqueeze(-1)
+
+    def _condition_hidden_states(self, hidden_states, text_embeds, text_attention_mask):
+        if self.text_conditioning == "film":
+            return self._condition_hidden_states_film(hidden_states, text_embeds, text_attention_mask)
+        return self._condition_hidden_states_attention(hidden_states, text_embeds, text_attention_mask)
 
     def router_probs(self, hidden_states, text_embeds=None, text_attention_mask=None):
         if text_embeds is None:
