@@ -4,7 +4,7 @@ export DS_BUILD_CPU_ADAM=1
 #!/bin/bash
 export WANDB_ENTITY="uiucnlp"
 export WANDB_PROJECT="mixture-of-layers"
-export WANDB_NAME="MoL_router_choose_layers_finetune_text-only"
+export WANDB_NAME="MoL_router_choose_layers_finetune_text-cond-attn-token-router_confidence-gate"
 export WANDB_MODE="online"  # ensure it uploads
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -12,8 +12,8 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 DEEPSPEED_CONFIG="${DEEPSPEED_CONFIG:-${REPO_ROOT}/scripts/zero3.json}"
 DATA_PATH="${DATA_PATH:-/shared/nas2/sstoica2/LLaVA/playground/data/eval/llava_v1_5_mix665k.json}"
 IMAGE_FOLDER="${IMAGE_FOLDER:-/shared/nas2/sstoica2/LLaVA/playground/data/eval}"
-PRETRAIN_DIR="${PRETRAIN_DIR:-${REPO_ROOT}/checkpoints/llava-v1.5-13b-moe-pretrain_2e-4_text-only-router_confidence-gate}"
-OUTPUT_DIR="${OUTPUT_DIR:-${REPO_ROOT}/checkpoints/llava-v1.5-13b-moe-finetune_2e-4_text-only-router_confidence-gate}"
+PRETRAIN_DIR="${PRETRAIN_DIR:-${REPO_ROOT}/checkpoints/llava-v1.5-13b-moe-pretrain_2e-4_text-cond-attn-token-router_pretrain}"
+OUTPUT_DIR="${OUTPUT_DIR:-${REPO_ROOT}/checkpoints/llava-v1.5-13b-moe-finetune_2e-4_text-cond-attn-token-router_learnable-gate}"
 
 deepspeed "${REPO_ROOT}/llava/train/train_mem_router.py" \
     --deepspeed "${DEEPSPEED_CONFIG}" \
@@ -29,8 +29,12 @@ deepspeed "${REPO_ROOT}/llava/train/train_mem_router.py" \
     --mm_use_im_start_end False \
     --mm_use_im_patch_token False \
     --mm_use_text_enc True \
-    --use_text_conditioned_router False \
-    --use_text_only_gating True \
+    --use_text_conditioned_router True \
+    --text_conditioning attention \
+    --text_attention_type qk \
+    --text_attention_dim 1024 \
+    --attn_level "token" \
+    --use_text_only_gating False \
     --text_pool mean \
     --text_scale 1.0 \
     --image_aspect_ratio pad \
@@ -59,8 +63,8 @@ deepspeed "${REPO_ROOT}/llava/train/train_mem_router.py" \
     --lazy_preprocess True \
     --force_reserve_layer True \
     --reserve_layer -2 \
-    --learnable_gate False \
-    --confidence_gate True \
+    --learnable_gate True \
+    --confidence_gate False \
     --confidence_gate_threshold 0.6 \
     --confidence_gate_slope 10.0 \
     --save_router_stats True \
