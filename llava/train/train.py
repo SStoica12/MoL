@@ -65,6 +65,7 @@ class ModelArguments:
     mm_use_im_patch_token: bool = field(default=True)
     mm_patch_merge_type: Optional[str] = field(default='flat')
     mm_vision_select_feature: Optional[str] = field(default="patch")
+    vision_tower_delta: bool = field(default=False)
     mm_use_text_enc: bool = field(default=False)  # for using image-aligned CLIP text encoder
 
 

@@ -65,7 +65,14 @@ else:
 class ScaledResidualEncoderLayer(nn.Module):
     def __init__(self, layer):
         super().__init__()
-        self.scaling_coef = nn.Parameter(torch.ones(2), requires_grad=True)
+        ref_param = next(layer.parameters(), None)
+        if ref_param is None:
+            self.scaling_coef = nn.Parameter(torch.ones(2), requires_grad=True)
+        else:
+            self.scaling_coef = nn.Parameter(
+                torch.ones(2, device=ref_param.device, dtype=ref_param.dtype),
+                requires_grad=True,
+            )
         self.layer = layer
     def forward(
         self,
@@ -85,7 +92,12 @@ class ScaledResidualEncoderLayer(nn.Module):
             **kwargs,
         )
         # print("===== done with attention ===== ")
-        hidden_states = residual + self.scaling_coef[0] * hidden_states
+        if residual.device != hidden_states.device or residual.dtype != hidden_states.dtype:
+            residual = residual.to(device=hidden_states.device, dtype=hidden_states.dtype)
+        scaling_coef_0 = self.scaling_coef[0]
+        if scaling_coef_0.device != hidden_states.device or scaling_coef_0.dtype != hidden_states.dtype:
+            scaling_coef_0 = scaling_coef_0.to(device=hidden_states.device, dtype=hidden_states.dtype)
+        hidden_states = residual + scaling_coef_0 * hidden_states
         # import pdb; pdb.set_trace()
         # print("===== done with residual scaling 1 ===== ")
         residual = hidden_states
@@ -93,7 +105,12 @@ class ScaledResidualEncoderLayer(nn.Module):
         # print("===== done with layer norm 2 ===== ")
         hidden_states = self.layer.mlp(hidden_states)
         # print("===== done with mlp ===== ")
-        hidden_states = residual + self.scaling_coef[1] * hidden_states
+        if residual.device != hidden_states.device or residual.dtype != hidden_states.dtype:
+            residual = residual.to(device=hidden_states.device, dtype=hidden_states.dtype)
+        scaling_coef_1 = self.scaling_coef[1]
+        if scaling_coef_1.device != hidden_states.device or scaling_coef_1.dtype != hidden_states.dtype:
+            scaling_coef_1 = scaling_coef_1.to(device=hidden_states.device, dtype=hidden_states.dtype)
+        hidden_states = residual + scaling_coef_1 * hidden_states
         # print("===== done with residual scaling 2 ===== ")
         # print("hidden_states.shape: ", hidden_states.shape )
         return (hidden_states, )
@@ -108,6 +125,9 @@ class CLIPVisionTower(nn.Module):
         self.vision_tower_name = vision_tower
         self.select_layer = args.mm_vision_select_layer
         self.select_feature = getattr(args, 'mm_vision_select_feature', 'patch')
+        self.vision_tower_delta = getattr(args, "vision_tower_delta", False)
+        self._vision_tower_deltas = None
+        self._delta_hook_handles = []
 
         if not delay_load:
             self.load_model()
@@ -116,6 +136,63 @@ class CLIPVisionTower(nn.Module):
         else:
             self.cfg_only = CLIPVisionConfig.from_pretrained(self.vision_tower_name)
 
+    def _get_layer_mlp(self, layer):
+        if hasattr(layer, "mlp"):
+            return layer.mlp
+        # Compatibility for wrapped layers.
+        if hasattr(layer, "layer") and hasattr(layer.layer, "mlp"):
+            return layer.layer.mlp
+        raise AttributeError("Unable to locate MLP module in vision encoder layer.")
+
+    def _register_delta_hooks(self):
+        if not self.vision_tower_delta or self._delta_hook_handles:
+            return
+
+        layers = self.vision_tower.vision_model.encoder.layers
+        num_layers = len(layers)
+
+        def _reset_delta_cache(_module, _inputs):
+            self._vision_tower_deltas = [None] * num_layers
+
+        def _capture_delta(layer_idx):
+            def _hook(_module, _inputs, output):
+                if self._vision_tower_deltas is not None:
+                    self._vision_tower_deltas[layer_idx] = output
+            return _hook
+
+        def _replace_hidden_states(hidden_states):
+            if hidden_states is None or not isinstance(hidden_states, (tuple, list)):
+                return hidden_states
+            if self._vision_tower_deltas is None:
+                return hidden_states
+            if len(hidden_states) != len(self._vision_tower_deltas) + 1:
+                return hidden_states
+            if any(delta is None for delta in self._vision_tower_deltas):
+                raise RuntimeError(
+                    "vision_tower_delta=True, but failed to capture all per-layer MLP deltas."
+                )
+            return (hidden_states[0], *self._vision_tower_deltas)  # [x0, delta1, delta2, ..., deltaL]
+
+        def _finalize_output(_module, _inputs, output):
+            if isinstance(output, tuple):
+                if len(output) >= 3:
+                    output = list(output)
+                    output[2] = _replace_hidden_states(output[2])
+                    output = tuple(output)
+                self._vision_tower_deltas = None
+                return output
+
+            if hasattr(output, "hidden_states"):
+                output.hidden_states = _replace_hidden_states(output.hidden_states)
+            self._vision_tower_deltas = None
+            return output
+
+        self._delta_hook_handles.append(self.vision_tower.register_forward_pre_hook(_reset_delta_cache))
+        for i, layer in enumerate(layers):
+            mlp = self._get_layer_mlp(layer)
+            self._delta_hook_handles.append(mlp.register_forward_hook(_capture_delta(i)))
+        self._delta_hook_handles.append(self.vision_tower.register_forward_hook(_finalize_output))
+
     def load_model(self, device_map=None):
         if self.is_loaded:
             print('{} is already loaded, `load_model` called again, skipping.'.format(self.vision_tower_name))
@@ -123,6 +200,7 @@ class CLIPVisionTower(nn.Module):
 
         self.image_processor = CLIPImageProcessor.from_pretrained(self.vision_tower_name)
         self.vision_tower = CLIPVisionModel.from_pretrained(self.vision_tower_name, device_map=device_map)
+        self._register_delta_hooks()
         
         # Replace layers BEFORE freezing to ensure new parameters are properly registered
         layers = self.vision_tower.vision_model.encoder.layers
@@ -255,6 +333,7 @@ class CLIPVisionTowerS2(CLIPVisionTower):
 
         self.image_processor = CLIPImageProcessor.from_pretrained(self.vision_tower_name)
         self.vision_tower = CLIPVisionModel.from_pretrained(self.vision_tower_name, device_map=device_map)
+        self._register_delta_hooks()
         
         # Replace layers BEFORE freezing to ensure new parameters are properly registered
         layers = self.vision_tower.vision_model.encoder.layers

@@ -68,6 +68,7 @@ class ModelArguments:
     mm_use_im_patch_token: bool = field(default=True)
     mm_patch_merge_type: Optional[str] = field(default='flat')
     mm_vision_select_feature: Optional[str] = field(default="patch")
+    vision_tower_delta: bool = field(default=False)
     num_layers_to_choose: Optional[int] = field(default=1)
     mm_use_text_enc: Optional[bool] = True
     use_text_conditioned_router: bool = False

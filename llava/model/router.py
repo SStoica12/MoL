@@ -301,7 +301,7 @@ class TextConditionedRouter(Router):
         text_conditioning: str = "film", # "film" or "attention"
         text_attention_type: str = "concat", # "concat" or "qk"
         text_attention_dim: Optional[int] = None,
-        attn_level: str = "layer", # "token" or "layer" (used when text_conditioning == "attention")
+        attn_level: str = "layer", # "token", "layer", or "patch_layer" (used when text_conditioning == "attention")
         force_reserve_layer: bool = False,
         reserve_layer: int = -2,
         learnable_gate: bool = False,
@@ -342,7 +342,7 @@ class TextConditionedRouter(Router):
         # Conditioning modules.
         if self.text_conditioning not in ("film", "attention", "attn"):
             raise ValueError(f"Unknown text_conditioning: {self.text_conditioning}")
-        if self.attn_level not in ("token", "layer"):
+        if self.attn_level not in ("token", "layer", "patch_layer"):
             raise ValueError(f"Unknown attn_level: {self.attn_level}")
         if self.text_conditioning == "film":
             # Map pooled text embedding -> FiLM (gamma, beta) for vision hidden size.
@@ -451,20 +451,125 @@ class TextConditionedRouter(Router):
             attn = torch.softmax(scores, dim=-1).to(dtype=hidden_states.dtype)
             return hidden_states * attn.unsqueeze(-1)
 
-        # Layer-level attention.
-        layer_summary = hidden_states.mean(dim=2)  # [L, B, H]
+        if self.attn_level == "layer":
+            # Layer-level attention.
+            layer_summary = hidden_states.mean(dim=2)  # [L, B, H]
+            if self.text_attention_type == "concat":
+                text_expanded = text_summary.unsqueeze(0).expand(layer_summary.shape[0], -1, -1)
+                concat = torch.cat([layer_summary, text_expanded], dim=-1)
+                scores = self.text_attn_mlp(concat).squeeze(-1)  # [L, B]
+            else:
+                q = self.text_attn_q(text_summary)  # [B, D]
+                k = self.text_attn_k(layer_summary)  # [L, B, D]
+                scores = (k * q.unsqueeze(0)).sum(dim=-1) * self.text_attn_scale  # [L, B]
+
+            # Normalize across layers, then scale each layer's tokens.
+            attn = torch.softmax(scores, dim=0).to(dtype=hidden_states.dtype)  # [L, B]
+            return hidden_states * attn.unsqueeze(-1).unsqueeze(-1)
+
+        raise ValueError(
+            f"attn_level={self.attn_level} is not supported by hidden-state conditioning; "
+            "use patch_layer routing path in forward."
+        )
+
+    def _resolve_reserve_idx(self, num_layers):
+        reserve_idx = self.reserve_layer
+        if reserve_idx < 0:
+            reserve_idx = num_layers + reserve_idx
+        return reserve_idx
+
+    def _patch_layer_router_probs(self, hidden_states, text_embeds, text_attention_mask):
+        """Compute per-patch distributions over layers.
+
+        Returns:
+            router_probs: [B, N, L] layer probabilities for each patch token.
+            router_probs_for_selection: [B, N, L] probabilities with reserved layer masked out when enabled.
+            reserve_layer_prob: [B] reserved-layer mixing weight (averaged across patches).
+        """
+        text_summary = self._pool_text(text_embeds, text_attention_mask).to(
+            device=hidden_states.device, dtype=hidden_states.dtype
+        )
+        if self.text_scale is not None:
+            text_summary = text_summary * self.text_scale
+
         if self.text_attention_type == "concat":
-            text_expanded = text_summary.unsqueeze(0).expand(layer_summary.shape[0], -1, -1)
-            concat = torch.cat([layer_summary, text_expanded], dim=-1)
-            scores = self.text_attn_mlp(concat).squeeze(-1)  # [L, B]
+            text_expanded = text_summary.unsqueeze(0).unsqueeze(2)
+            text_expanded = text_expanded.expand(
+                hidden_states.shape[0], -1, hidden_states.shape[2], -1
+            )
+            concat = torch.cat([hidden_states, text_expanded], dim=-1)
+            scores = self.text_attn_mlp(concat).squeeze(-1)  # [L, B, N]
         else:
             q = self.text_attn_q(text_summary)  # [B, D]
-            k = self.text_attn_k(layer_summary)  # [L, B, D]
-            scores = (k * q.unsqueeze(0)).sum(dim=-1) * self.text_attn_scale  # [L, B]
+            k = self.text_attn_k(hidden_states)  # [L, B, N, D]
+            scores = (k * q.unsqueeze(0).unsqueeze(2)).sum(dim=-1) * self.text_attn_scale  # [L, B, N]
 
-        # Normalize across layers, then scale each layer's tokens.
-        attn = torch.softmax(scores, dim=0).to(dtype=hidden_states.dtype)  # [L, B]
-        return hidden_states * attn.unsqueeze(-1).unsqueeze(-1)
+        # Reorder for per-patch routing: softmax over layers for each (B, N).
+        scores = scores.permute(1, 2, 0).to(torch.float32)  # [B, N, L]
+        if self.training:
+            random_noise = torch.rand(scores.shape, device=scores.device)
+            scores = scores + random_noise
+
+        temperature = self.router_temperature if self.router_temperature is not None else 1.0
+        if temperature != 1.0:
+            scores = scores / temperature
+
+        if self.learnable_gate and self.confidence_gate:
+            raise ValueError("learnable_gate and confidence_gate are mutually exclusive.")
+
+        use_gate = self.force_reserve_layer and (self.learnable_gate or self.confidence_gate)
+        if use_gate:
+            reserve_idx = self._resolve_reserve_idx(scores.shape[-1])
+            masked_scores = scores.clone()
+            masked_scores[:, :, reserve_idx] = -1e9
+            non_reserved_probs = torch.softmax(masked_scores, dim=-1)
+
+            if self.learnable_gate:
+                if self.reserve_gate is None or self.reserve_gate.in_features != hidden_states.shape[-1]:
+                    self.reserve_gate = nn.Linear(hidden_states.shape[-1], 1).to(
+                        device=hidden_states.device, dtype=hidden_states.dtype
+                    )
+                reserve_hidden = hidden_states[self.reserve_layer]  # [B, N, H]
+                pooled = reserve_hidden.mean(dim=1)  # [B, H]
+                gate_logits = self.reserve_gate(pooled).squeeze(-1)
+                reserve_layer_prob = torch.sigmoid(gate_logits)  # [B]
+            else:
+                # Average token-level confidence to obtain an image-level reserve gate.
+                conf = non_reserved_probs.max(dim=-1).values.mean(dim=-1)
+                reserve_layer_prob = torch.sigmoid(
+                    self.confidence_gate_slope * (self.confidence_gate_threshold - conf)
+                )
+
+            router_probs = non_reserved_probs * (1.0 - reserve_layer_prob).unsqueeze(-1).unsqueeze(-1)
+            router_probs[:, :, reserve_idx] = reserve_layer_prob.unsqueeze(-1)
+            router_probs = router_probs.to(scores.dtype)
+        else:
+            router_probs = torch.softmax(scores, dim=-1).to(scores.dtype)  # [B, N, L]
+
+        if self.save_router_stats and self.training:
+            router_probs_summary = router_probs.mean(dim=1)  # [B, L]
+            if self.step_rp % self.save_steps_router_stats or self.step_rp == 0:
+                self.router_probs_per_step[self.step_rp] = (
+                    router_probs_summary.cpu().to(torch.float32).detach()
+                )
+            self.step_rp += 1
+
+        if self.cap_softmax:
+            B, N, L = router_probs.shape
+            router_probs = self.cap_layer_prob(
+                router_probs.reshape(B * N, L),
+                self.cap_softmax_value,
+                self.reserve_layer,
+            ).reshape(B, N, L)
+
+        if self.force_reserve_layer:
+            reserve_idx = self._resolve_reserve_idx(router_probs.shape[-1])
+            router_probs_for_selection = router_probs.clone()
+            router_probs_for_selection[:, :, reserve_idx] = -1.0
+            reserve_layer_prob = router_probs[:, :, reserve_idx].mean(dim=1)
+            return router_probs, router_probs_for_selection, reserve_layer_prob
+
+        return router_probs, router_probs, None
 
     def _condition_hidden_states(self, hidden_states, text_embeds, text_attention_mask):
         if self.text_conditioning == "film":
@@ -474,6 +579,15 @@ class TextConditionedRouter(Router):
     def router_probs(self, hidden_states, text_embeds=None, text_attention_mask=None):
         if text_embeds is None:
             return super().router_probs(hidden_states)
+        if (
+            self.text_conditioning in ("attention", "attn")
+            and self.attn_level == "patch_layer"
+        ):
+            patch_router_probs, _, _ = self._patch_layer_router_probs(
+                hidden_states, text_embeds, text_attention_mask
+            )
+            # Keep API compatible with [B, L] expected by auxiliary loss code.
+            return patch_router_probs.mean(dim=1)
         conditioned_hidden_states = self._condition_hidden_states(
             hidden_states, text_embeds, text_attention_mask
         )
@@ -488,6 +602,37 @@ class TextConditionedRouter(Router):
             text_attention_mask: [B, T] attention mask for pooling.
         """
         L, B, N, H = hidden_states.shape
+        if (
+            text_embeds is not None
+            and self.text_conditioning in ("attention", "attn")
+            and self.attn_level == "patch_layer"
+        ):  # patch-level attention conditioning with per-patch layer selection
+            self.num_layers = L
+            _, router_probs_for_selection, reserve_layer_prob = self._patch_layer_router_probs(
+                hidden_states, text_embeds, text_attention_mask
+            )
+
+            hidden_states = hidden_states.permute(1, 2, 0, 3)  # [B, N, L, H]
+            selected_layers = torch.argmax(router_probs_for_selection, dim=-1)  # [B, N]
+            gather_idx = selected_layers.unsqueeze(-1).unsqueeze(-1).expand(B, N, 1, H)
+            selected_hidden_states = torch.gather(hidden_states, 2, gather_idx).squeeze(2)  # [B, N, H]
+
+            if self.force_reserve_layer:
+                reserve_idx = self._resolve_reserve_idx(L)
+                reserve_hidden_state = hidden_states[:, :, reserve_idx, :]  # [B, N, H]
+                reserve_layer_prob = reserve_layer_prob.to(selected_hidden_states.dtype)
+                blend = reserve_layer_prob.unsqueeze(-1).unsqueeze(-1)
+                image_features = (1.0 - blend) * selected_hidden_states + blend * reserve_hidden_state
+            else:
+                image_features = selected_hidden_states
+
+            if self.vision_feature_select_strategy == "patch":
+                image_features = image_features[:, 1:, :]
+            if self.vision_feature_select_strategy == "cls":
+                image_features = image_features[:, 0, :]
+            assert image_features.ndim == 3
+            return image_features
+
         k = self.num_layers_to_choose
         self.num_layers = L
         router_probs = self.router_probs(hidden_states, text_embeds, text_attention_mask)
