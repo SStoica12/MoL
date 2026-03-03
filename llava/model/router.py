@@ -31,6 +31,9 @@ class Router(nn.Module):
         self.confidence_gate_threshold = confidence_gate_threshold
         self.confidence_gate_slope = confidence_gate_slope
         self.reserve_gate = nn.Linear(weights.shape[1], 1) if learnable_gate else None
+        # Cache router probabilities from the most recent forward pass so auxiliary
+        # losses can reuse the same graph without triggering a second router pass.
+        self._latest_router_probs_for_aux = None
         if self.learnable_gate and self.confidence_gate:
             raise ValueError("learnable_gate and confidence_gate are mutually exclusive.")
         # stats 
@@ -141,7 +144,7 @@ class Router(nn.Module):
                 print("\n Successfully gathered the weights and computed router_logits")
         else:
             router_logits = torch.einsum("lbnh, nh -> bl", hidden_states, self.weights)
-       
+
         if self.training:
             # Use the device from hidden_states to avoid issues with offloaded weights
             weights_device = hidden_states.device
@@ -252,6 +255,7 @@ class Router(nn.Module):
         k = self.num_layers_to_choose
         self.num_layers = L
         router_probs = self.router_probs(hidden_states)
+        self._latest_router_probs_for_aux = router_probs
         if self.force_reserve_layer:
             layers, probs, reserve_layer_prob = self.get_layer_and_scaling_probs(router_probs)
         else:
@@ -524,7 +528,11 @@ class TextConditionedRouter(Router):
             masked_scores[:, :, reserve_idx] = -1e9
             non_reserved_probs = torch.softmax(masked_scores, dim=-1)
 
-            if self.learnable_gate:
+            if self.learnable_gate:  
+                
+                # TODO: learnable_gate is not text-conditioned right now, but could be if we feed text_summary into the reserve_gate MLP.
+                
+                
                 if self.reserve_gate is None or self.reserve_gate.in_features != hidden_states.shape[-1]:
                     self.reserve_gate = nn.Linear(hidden_states.shape[-1], 1).to(
                         device=hidden_states.device, dtype=hidden_states.dtype
@@ -582,7 +590,7 @@ class TextConditionedRouter(Router):
         if (
             self.text_conditioning in ("attention", "attn")
             and self.attn_level == "patch_layer"
-        ):
+        ):  # patch-level, layer-wise attention conditioning with differentiable per-patch layer mixing
             patch_router_probs, _, _ = self._patch_layer_router_probs(
                 hidden_states, text_embeds, text_attention_mask
             )
@@ -606,25 +614,34 @@ class TextConditionedRouter(Router):
             text_embeds is not None
             and self.text_conditioning in ("attention", "attn")
             and self.attn_level == "patch_layer"
-        ):  # patch-level attention conditioning with per-patch layer selection
+        ):  # patch-level attention conditioning with differentiable per-patch layer mixing
             self.num_layers = L
-            _, router_probs_for_selection, reserve_layer_prob = self._patch_layer_router_probs(
+            router_probs, _, reserve_layer_prob = self._patch_layer_router_probs(
                 hidden_states, text_embeds, text_attention_mask
             )
+            # Collapse per-patch routing to per-image routing for load-balancing loss.
+            self._latest_router_probs_for_aux = router_probs.mean(dim=1)
 
             hidden_states = hidden_states.permute(1, 2, 0, 3)  # [B, N, L, H]
-            selected_layers = torch.argmax(router_probs_for_selection, dim=-1)  # [B, N]
-            gather_idx = selected_layers.unsqueeze(-1).unsqueeze(-1).expand(B, N, 1, H)
-            selected_hidden_states = torch.gather(hidden_states, 2, gather_idx).squeeze(2)  # [B, N, H]
-
             if self.force_reserve_layer:
                 reserve_idx = self._resolve_reserve_idx(L)
                 reserve_hidden_state = hidden_states[:, :, reserve_idx, :]  # [B, N, H]
+                # Keep reserve blending behavior, but make non-reserve path differentiable.
+                non_reserved_probs = router_probs.clone()
+                non_reserved_probs[:, :, reserve_idx] = 0.0
+                denom = non_reserved_probs.sum(dim=-1, keepdim=True).clamp(min=1e-8)
+                non_reserved_probs = non_reserved_probs / denom
+                non_reserved_probs = non_reserved_probs.to(hidden_states.dtype)
+                selected_hidden_states = (
+                    non_reserved_probs.unsqueeze(-1) * hidden_states
+                ).sum(dim=2)  # [B, N, H]
                 reserve_layer_prob = reserve_layer_prob.to(selected_hidden_states.dtype)
                 blend = reserve_layer_prob.unsqueeze(-1).unsqueeze(-1)
                 image_features = (1.0 - blend) * selected_hidden_states + blend * reserve_hidden_state
             else:
-                image_features = selected_hidden_states
+                # Softly mix all layers using per-patch router probabilities.
+                mix_probs = router_probs.to(hidden_states.dtype)
+                image_features = (mix_probs.unsqueeze(-1) * hidden_states).sum(dim=2)  # [B, N, H]
 
             if self.vision_feature_select_strategy == "patch":
                 image_features = image_features[:, 1:, :]
@@ -636,6 +653,7 @@ class TextConditionedRouter(Router):
         k = self.num_layers_to_choose
         self.num_layers = L
         router_probs = self.router_probs(hidden_states, text_embeds, text_attention_mask)
+        self._latest_router_probs_for_aux = router_probs
         if self.force_reserve_layer:
             layers, probs, reserve_layer_prob = self.get_layer_and_scaling_probs(router_probs)
         else:
@@ -836,6 +854,7 @@ class TextOnlyRouter(Router):
         k = self.num_layers_to_choose
         self.num_layers = L
         router_probs = self.router_probs(hidden_states, text_embeds, text_attention_mask)
+        self._latest_router_probs_for_aux = router_probs
         if self.force_reserve_layer:
             layers, probs, reserve_layer_prob = self.get_layer_and_scaling_probs(router_probs)
         else:

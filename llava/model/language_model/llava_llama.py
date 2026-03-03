@@ -200,7 +200,12 @@ class RouterLlavaLlamaForCausalLM(LlavaLlamaForCausalLM):
         return router_probs
     
     def get_aux_loss(self, images):
-        # calculate the hidden states
+        # Prefer router probabilities from the latest multimodal forward pass.
+        cached_router_probs = getattr(self.router, "_latest_router_probs_for_aux", None)
+        if cached_router_probs is not None:
+            return self.router.load_balance_loss(cached_router_probs)
+
+        # Fallback path (legacy): recompute router probabilities from images.
         vision_tower = self.get_model().get_vision_tower().vision_tower
         device = vision_tower.device
         dtype = vision_tower.dtype

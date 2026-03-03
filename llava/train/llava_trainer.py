@@ -515,9 +515,10 @@ class RouterLLaVATrainer(Trainer):
         # print("============================= compute_loss =============================")
         outputs = model(**inputs)
         loss = outputs.loss
-        images = inputs.pop('images') # CHECK. I think it should exist because 'image' should be in instance[0] in /LLaVA/llava/train/train.py DataCollatorForSupervisedDataset
-        # print("==================== progressing to get the aux_loss ====================")
-        load_balance_loss = model.get_aux_loss(images)
-        self.aux_losses.append(load_balance_loss)
-        loss += model.load_balance_alpha * load_balance_loss
+        if getattr(model, "load_balance_alpha", 0.0) != 0.0:
+            images = inputs.get('images')
+            # print("==================== progressing to get the aux_loss ====================")
+            load_balance_loss = model.get_aux_loss(images)
+            self.aux_losses.append(load_balance_loss)
+            loss += model.load_balance_alpha * load_balance_loss
         return (loss, outputs) if return_outputs else loss
