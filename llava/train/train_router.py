@@ -1165,6 +1165,9 @@ def train(attn_implementation=None):
         model.config.text_attention_type = model_args.text_attention_type
         model.config.text_attention_dim = model_args.text_attention_dim
         model.config.attn_level = model_args.attn_level
+        model.config.text_pool = model_args.text_pool
+        model.config.text_scale = model_args.text_scale
+        model.config.num_layers_to_choose = model_args.num_layers_to_choose
         if model_args.use_text_conditioned_router and model_args.use_text_only_gating:
             raise ValueError("use_text_conditioned_router and use_text_only_gating are mutually exclusive.")
         if (model_args.use_text_conditioned_router or model_args.use_text_only_gating) and getattr(model.config, "mm_text_hidden_size", None) is None:
@@ -1195,8 +1198,8 @@ def train(attn_implementation=None):
             model.router = router_cls(
                 model.config,
                 router_weights,
-                model.config.mm_vision_select_feature,
-                training_args.load_balancing_alpha,
+                top_k=model_args.num_layers_to_choose,
+                load_balancing_alpha=training_args.load_balancing_alpha,
                 text_pool=model_args.text_pool,
                 text_scale=model_args.text_scale,
                 text_conditioning=model_args.text_conditioning,
@@ -1209,13 +1212,14 @@ def train(attn_implementation=None):
                 confidence_gate=model_args.confidence_gate,
                 confidence_gate_threshold=model_args.confidence_gate_threshold,
                 confidence_gate_slope=model_args.confidence_gate_slope,
+                vision_feature_select_strategy=model_args.mm_vision_select_feature,
             )
         elif model_args.use_text_only_gating:
             model.router = router_cls(
                 model.config,
                 router_weights,
-                model.config.mm_vision_select_feature,
-                training_args.load_balancing_alpha,
+                top_k=model_args.num_layers_to_choose,
+                load_balancing_alpha=training_args.load_balancing_alpha,
                 text_pool=model_args.text_pool,
                 text_scale=model_args.text_scale,
                 force_reserve_layer=model_args.force_reserve_layer,
@@ -1224,20 +1228,23 @@ def train(attn_implementation=None):
                 confidence_gate=model_args.confidence_gate,
                 confidence_gate_threshold=model_args.confidence_gate_threshold,
                 confidence_gate_slope=model_args.confidence_gate_slope,
+                vision_feature_select_strategy=model_args.mm_vision_select_feature,
             )
         else:
             model.router = router_cls(
                 model.config,
                 router_weights,
-                model.config.mm_vision_select_feature,
-                training_args.load_balancing_alpha,
+                top_k=model_args.num_layers_to_choose,
+                load_balancing_alpha=training_args.load_balancing_alpha,
                 learnable_gate=model_args.learnable_gate,
                 confidence_gate=model_args.confidence_gate,
                 confidence_gate_threshold=model_args.confidence_gate_threshold,
                 confidence_gate_slope=model_args.confidence_gate_slope,
+                vision_feature_select_strategy=model_args.mm_vision_select_feature,
             )
         # chooses which layers to apply the router 
         model.router.num_layers_to_choose = model_args.num_layers_to_choose
+        model.router.vision_feature_select_strategy = model_args.mm_vision_select_feature
         model.router.force_reserve_layer = model_args.force_reserve_layer
         model.router.reserve_layer =  model_args.reserve_layer
         # for logging purposes, not to be used during inference

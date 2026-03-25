@@ -1,7 +1,8 @@
 #!/bin/bash
+
 export WANDB_ENTITY="uiucnlp"
 export WANDB_PROJECT="mixture-of-layers"
-export WANDB_NAME="MoL_router_choose_layers_pretrain_text-cond-attn-token-router_pretrain"
+export WANDB_NAME="MoL_router_choose_layers_text-cond-attn-token-router_learnable_gate_lr1e-5-pretrain_k2"
 export WANDB_MODE="online"  # ensure it uploads
 # export WANDB_DIR="/shared/nas2/jk100/MoL/scripts/v1_5/wandb" - where to store wandb logs
 
@@ -9,9 +10,10 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 DEEPSPEED_CONFIG="${DEEPSPEED_CONFIG:-${REPO_ROOT}/scripts/zero2.json}"
 DATA_PATH="${DATA_PATH:-/shared/nas/data/m1/sstoica2/.cache/huggingface/.cache/huggingface/datasets--Blip/blip_laion_cc_sbu_558k.json}"
 IMAGE_FOLDER="${IMAGE_FOLDER:-/shared/nas/data/m1/sstoica2/.cache/huggingface/.cache/huggingface/datasets--Blip/images}"
-OUTPUT_DIR="${OUTPUT_DIR:-${REPO_ROOT}/checkpoints/llava-v1.5-13b-moe-pretrain_2e-4_text-cond-attn-token-router_pretrain}"
+OUTPUT_DIR="${OUTPUT_DIR:-${REPO_ROOT}/checkpoints/llava-v1.5-13b-moe-pretrain_1e-5_text-cond-attn-token-router_pretrain_scaled-residual_k2}"
+MASTER_PORT="${MASTER_PORT:-29600}"
 
-CUDA_VISIBLE_DEVICES=0,1,2,3 deepspeed "${REPO_ROOT}/llava/train/train_mem_router.py" \
+deepspeed --master_port "${MASTER_PORT}" --include localhost:0,1,2,3 "${REPO_ROOT}/llava/train/train_mem_router.py" \
     --deepspeed "${DEEPSPEED_CONFIG}" \
     --model_name_or_path lmsys/vicuna-13b-v1.5 \
     --version plain \
@@ -23,10 +25,10 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 deepspeed "${REPO_ROOT}/llava/train/train_mem_route
     --tune_residual_scaling_coef False \
     --freeze_backbone True \
     --mm_vision_select_layer -2 \
-    --num_layers_to_choose 1 \
     --mm_use_im_start_end False \
     --mm_use_im_patch_token False \
     --mm_use_text_enc True \
+    --num_layers_to_choose 2 \
     --use_text_conditioned_router True \
     --text_conditioning attention \
     --text_attention_type qk \
@@ -46,7 +48,7 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 deepspeed "${REPO_ROOT}/llava/train/train_mem_route
     --save_steps 436 \
     --save_total_limit 100 \
     --mm_projector_lr 1e-3 \
-    --router_lr 2e-4 \
+    --router_lr 1e-5 \
     --weight_decay 0. \
     --warmup_ratio 0.03 \
     --lr_scheduler_type "cosine" \
@@ -66,4 +68,6 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 deepspeed "${REPO_ROOT}/llava/train/train_mem_route
     --save_steps_router_stats 5 \
     --report_to wandb
 
-python /shared/nas/data/m1/sstoica2/PAPO_copy/debug_gpu.py --gpus 0,1,2,3 --memory 70
+    # --router_lr 2e-4 \ - originally
+
+python "${REPO_ROOT}/scripts/v1_5/mol_train_gpu.py" --gpus 0,1,2,3
