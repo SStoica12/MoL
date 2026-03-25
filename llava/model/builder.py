@@ -14,13 +14,77 @@
 
 
 import os
+import re
 import warnings
 import shutil
+from pathlib import Path
 
 from transformers import AutoTokenizer, AutoModelForCausalLM, AutoConfig, BitsAndBytesConfig
 import torch
 from llava.model import *
 from llava.constants import DEFAULT_IMAGE_PATCH_TOKEN, DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN
+from llava.model.language_model.llava_llama import RouterLlavaLlamaForCausalLM
+
+
+def _local_checkpoint_has_router_weights(model_path):
+    expanded_path = os.path.expanduser(model_path)
+    if not os.path.isdir(expanded_path):
+        return False
+
+    index_files = (
+        "model.safetensors.index.json",
+        "pytorch_model.bin.index.json",
+    )
+    for index_name in index_files:
+        index_path = os.path.join(expanded_path, index_name)
+        if not os.path.isfile(index_path):
+            continue
+        try:
+            with open(index_path, "r", encoding="utf-8") as f:
+                if '"router.' in f.read():
+                    return True
+        except OSError:
+            continue
+    return False
+
+
+def _model_requires_router(config, model_path):
+    architectures = getattr(config, "architectures", None) or []
+    if any(str(arch).startswith("RouterLlava") for arch in architectures):
+        return True
+    if getattr(config, "use_text_conditioned_router", False):
+        return True
+    if getattr(config, "use_text_only_gating", False):
+        return True
+    return _local_checkpoint_has_router_weights(model_path)
+
+
+def _infer_top_k_from_model_path(model_path):
+    match = re.search(r"(?:^|[_-])k(\d+)(?:$|[_-])", Path(os.path.expanduser(model_path)).name)
+    if not match:
+        return None
+    return int(match.group(1))
+
+
+def _apply_router_config_fallbacks(config, model_path):
+    config.has_router = True
+    top_k = getattr(config, "num_layers_to_choose", None)
+    if not isinstance(top_k, int) or top_k < 1:
+        inferred_top_k = _infer_top_k_from_model_path(model_path)
+        if inferred_top_k is not None:
+            config.num_layers_to_choose = inferred_top_k
+            print(
+                "Router checkpoint missing num_layers_to_choose in config; "
+                f"inferred k={inferred_top_k} from {Path(model_path).name}."
+            )
+        else:
+            config.num_layers_to_choose = 1
+
+    if getattr(config, "text_pool", None) is None:
+        config.text_pool = "mean"
+    if getattr(config, "text_scale", None) is None:
+        config.text_scale = 1.0
+    return config
 
 
 def load_pretrained_model(model_path, model_base, model_name, load_8bit=False, load_4bit=False, device_map="auto", device="cuda", use_flash_attn=False, **kwargs):
@@ -114,11 +178,21 @@ def load_pretrained_model(model_path, model_base, model_name, load_8bit=False, l
                 )
             else:
                 tokenizer = AutoTokenizer.from_pretrained(model_path, use_fast=False)
-                model = LlavaLlamaForCausalLM.from_pretrained(
-                    model_path,
-                    low_cpu_mem_usage=True,
-                    **kwargs
-                )
+                cfg_pretrained = AutoConfig.from_pretrained(model_path)
+                if _model_requires_router(cfg_pretrained, model_path):
+                    cfg_pretrained = _apply_router_config_fallbacks(cfg_pretrained, model_path)
+                    model = RouterLlavaLlamaForCausalLM.from_pretrained(
+                        model_path,
+                        low_cpu_mem_usage=True,
+                        config=cfg_pretrained,
+                        **kwargs
+                    )
+                else:
+                    model = LlavaLlamaForCausalLM.from_pretrained(
+                        model_path,
+                        low_cpu_mem_usage=True,
+                        **kwargs
+                    )
     else:
         # Load language model
         if model_base is not None:
