@@ -97,6 +97,7 @@ def main(args):
                 input_ids,
                 images=image_tensor,
                 image_sizes=[image_size],
+                clip_texts=[prompt],
                 do_sample=True if args.temperature > 0 else False,
                 temperature=args.temperature,
                 max_new_tokens=args.max_new_tokens,

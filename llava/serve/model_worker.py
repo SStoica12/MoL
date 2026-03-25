@@ -181,6 +181,7 @@ class ModelWorker:
             max_new_tokens=max_new_tokens,
             streamer=streamer,
             use_cache=True,
+            clip_texts=[prompt],
             **image_args
         ))
         thread.start()
