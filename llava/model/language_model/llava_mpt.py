@@ -98,10 +98,13 @@ class LlavaMptForCausalLM(MptForCausalLM, LlavaMetaForCausalLM):
 
     def prepare_inputs_for_generation(self, input_ids, past_key_values=None, inputs_embeds=None, **kwargs):
         images = kwargs.pop("images", None)
+        clip_texts = kwargs.pop("clip_texts", None)
         _inputs = super().prepare_inputs_for_generation(
             input_ids, past_key_values=past_key_values, inputs_embeds=inputs_embeds, **kwargs
         )
         _inputs['images'] = images
+        if clip_texts is not None:
+            _inputs['clip_texts'] = clip_texts
         return _inputs
 
 class RouterLlavaMptForCausalLM(LlavaMptForCausalLM):
@@ -142,6 +145,11 @@ class RouterLlavaMptForCausalLM(LlavaMptForCausalLM):
         return router_probs
     
     def get_aux_loss(self, images):
+        # Prefer router probabilities from the latest multimodal forward pass.
+        cached_router_probs = getattr(self.router, "_latest_router_probs_for_aux", None)
+        if cached_router_probs is not None:
+            return self.router.load_balance_loss(cached_router_probs)
+
         # calculate the hidden states
         vision_tower = self.get_model().get_vision_tower().vision_tower
         device = vision_tower.device

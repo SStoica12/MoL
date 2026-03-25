@@ -25,6 +25,90 @@ from transformers.modeling_outputs import CausalLMOutputWithPast
 from transformers.generation.utils import GenerateOutput
 
 from ..llava_arch import LlavaMetaModel, LlavaMetaForCausalLM
+from ..router import Router, TextConditionedRouter, TextOnlyRouter
+
+
+def _config_requires_router(config):
+    if getattr(config, "has_router", False):
+        return True
+    architectures = getattr(config, "architectures", None) or []
+    if any(str(arch).startswith("RouterLlava") for arch in architectures):
+        return True
+    if getattr(config, "use_text_conditioned_router", False):
+        return True
+    if getattr(config, "use_text_only_gating", False):
+        return True
+    return False
+
+
+def _router_init_kwargs(config):
+    return {
+        "load_balancing_alpha": getattr(config, "load_balancing_alpha", 10**-2),
+        "force_reserve_layer": getattr(config, "force_reserve_layer", False),
+        "reserve_layer": getattr(config, "reserve_layer", -2),
+        "learnable_gate": getattr(config, "learnable_gate", False),
+        "confidence_gate": getattr(config, "confidence_gate", False),
+        "confidence_gate_threshold": getattr(config, "confidence_gate_threshold", 0.6),
+        "confidence_gate_slope": getattr(config, "confidence_gate_slope", 10.0),
+        "vision_feature_select_strategy": getattr(config, "mm_vision_select_feature", "patch"),
+    }
+
+
+def _apply_router_runtime_settings(router, config, top_k):
+    router.num_layers_to_choose = top_k
+    router.save_router_stats = getattr(config, "save_router_stats", False)
+    router.save_steps_router_stats = getattr(config, "save_steps_router_stats", 200)
+    router.cap_softmax = getattr(config, "cap_softmax", False)
+    router.cap_softmax_value = getattr(config, "cap_softmax_value", 0.06)
+    return router
+
+
+def _build_router_from_config(model, config):
+    vision_tower = model.get_model().get_vision_tower()
+    if vision_tower is None:
+        raise ValueError("Router checkpoint requires a vision tower to reconstruct the router.")
+
+    hidden_size = vision_tower.hidden_size
+    num_image_tokens = vision_tower.num_patches + 1
+    router_weights = torch.zeros(
+        (num_image_tokens, hidden_size),
+        dtype=model.lm_head.weight.dtype,
+        device=model.lm_head.weight.device,
+    )
+    top_k = getattr(config, "num_layers_to_choose", 1)
+    init_kwargs = _router_init_kwargs(config)
+
+    if getattr(config, "use_text_only_gating", False):
+        router = TextOnlyRouter(
+            config,
+            router_weights,
+            top_k=top_k,
+            text_pool=getattr(config, "text_pool", "mean"),
+            text_scale=getattr(config, "text_scale", 1.0),
+            **init_kwargs,
+        )
+    elif getattr(config, "use_text_conditioned_router", False):
+        router = TextConditionedRouter(
+            config,
+            router_weights,
+            top_k=top_k,
+            text_pool=getattr(config, "text_pool", "mean"),
+            text_scale=getattr(config, "text_scale", 1.0),
+            text_conditioning=getattr(config, "text_conditioning", "film"),
+            text_attention_type=getattr(config, "text_attention_type", "concat"),
+            text_attention_dim=getattr(config, "text_attention_dim", None),
+            attn_level=getattr(config, "attn_level", "layer"),
+            **init_kwargs,
+        )
+    else:
+        router = Router(
+            config,
+            router_weights,
+            top_k=top_k,
+            **init_kwargs,
+        )
+
+    return _apply_router_runtime_settings(router, config, top_k)
 
 
 class LlavaConfig(LlamaConfig):
@@ -119,6 +203,7 @@ class LlavaLlamaForCausalLM(LlamaForCausalLM, LlavaMetaForCausalLM):
     ) -> Union[GenerateOutput, torch.LongTensor]:
         position_ids = kwargs.pop("position_ids", None)
         attention_mask = kwargs.pop("attention_mask", None)
+        clip_texts = kwargs.pop("clip_texts", None)
         if "inputs_embeds" in kwargs:
             raise NotImplementedError("`inputs_embeds` is not supported")
 
@@ -137,7 +222,8 @@ class LlavaLlamaForCausalLM(LlamaForCausalLM, LlavaMetaForCausalLM):
                 None,
                 None,
                 images,
-                image_sizes=image_sizes
+                image_sizes=image_sizes,
+                clip_texts=clip_texts,
             )
         else:
             inputs_embeds = self.get_model().embed_tokens(inputs)
@@ -165,12 +251,18 @@ class LlavaLlamaForCausalLM(LlamaForCausalLM, LlavaMetaForCausalLM):
 class RouterLlavaLlamaForCausalLM(LlavaLlamaForCausalLM):
     def __init__(self, config, router = None, load_balance_alpha=10**-2, type="llava"):
         super().__init__(config)
+        if router is None and _config_requires_router(config):
+            router = _build_router_from_config(self, config)
         self.router = router
         self.load_balance_alpha = load_balance_alpha
     def get_model(self):
         return self.model
     def encode_images(self, images, text_embeds=None, text_attention_mask=None):
-        print("--------- I AM IN MOL ROUTER ENCODE IMAGES ---------")
+        if self.router is None:
+            return super().encode_images(
+                images, text_embeds=text_embeds, text_attention_mask=text_attention_mask
+            )
+
         vision_tower = self.get_model().get_vision_tower().vision_tower
         device = vision_tower.device
         dtype = vision_tower.dtype
@@ -188,9 +280,19 @@ class RouterLlavaLlamaForCausalLM(LlavaLlamaForCausalLM):
             text_embeds=text_embeds,
             text_attention_mask=text_attention_mask,
         ) # do not want to include the embedding layer
-        assert image_features.requires_grad == True
-        # import pdb; pdb.set_trace()
-        image_features = self.get_model().mm_projector(image_features) # image_features.requires_grad = True
+        if self.training and torch.is_grad_enabled() and not image_features.requires_grad:
+            raise RuntimeError("Router image features lost gradients during training.")
+        mm_projector = self.get_model().mm_projector
+        projector_param = next(mm_projector.parameters(), None)
+        if projector_param is not None and (
+            image_features.device != projector_param.device
+            or image_features.dtype != projector_param.dtype
+        ):
+            image_features = image_features.to(
+                device=projector_param.device,
+                dtype=projector_param.dtype,
+            )
+        image_features = mm_projector(image_features) # image_features.requires_grad = True
         # assert image_features.requires_grad == True
         return image_features
     
