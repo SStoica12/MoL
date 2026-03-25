@@ -116,6 +116,7 @@ def eval_model(args):
             input_ids,
             images=images_tensor,
             image_sizes=image_sizes,
+            clip_texts=[prompt],
             do_sample=True if args.temperature > 0 else False,
             temperature=args.temperature,
             top_p=args.top_p,
