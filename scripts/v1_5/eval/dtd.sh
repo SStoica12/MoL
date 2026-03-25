@@ -20,6 +20,9 @@ MODEL_PATHS=(
     "${CHECKPOINT_ROOT}/llava-v1.5-13b-moe-finetune_2e-4_text-cond-attn-token-router_learnable-gate_scaled-residual"
     "${CHECKPOINT_ROOT}/llava-v1.5-13b-moe-finetune_2e-4_text-cond-film-router_confidence-gate_scaled-residual"
     "${CHECKPOINT_ROOT}/llava-v1.5-13b-moe-finetune_2e-4_text-cond-film-router_learnable-gate_scaled-residual"
+    "${CHECKPOINT_ROOT}/llava-v1.5-13b-moe-finetune_2e-4_text-cond-attn-patchlayer-softmix-router_learnable-gate_fixed-aux-loss_router-lr1e-5-pretrain_lr1e-5-finetune"
+    "${CHECKPOINT_ROOT}/llava-v1.5-13b-moe-finetune_2e-4_text-cond-attn-patchlayer-softmix-router_learnable-gate_fixed-aux-loss_router-lr2e-5-pretrain_lr5e-6-finetune"
+    "${CHECKPOINT_ROOT}/llava-v1.5-13b-moe-finetune_2e-4_text-cond-attn-patchlayer-softmix-router_learnable-gate_fixed-aux-loss"
 )
 
 
