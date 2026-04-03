@@ -14,6 +14,11 @@ from transformers.trainer import (
 )
 from typing import List, Optional
 
+def rank0_print(*args):
+    import os
+    local_rank = int(os.environ.get("LOCAL_RANK", 0))
+    if local_rank == 0:
+        print(*args)
 
 def maybe_zero_3(param, ignore_status=False, name=None):
     from deepspeed import zero
@@ -21,7 +26,7 @@ def maybe_zero_3(param, ignore_status=False, name=None):
     if hasattr(param, "ds_id"):
         if param.ds_status == ZeroParamStatus.NOT_AVAILABLE:
             if not ignore_status:
-                print(name, 'no ignore status')
+                rank0_print(name, 'no ignore status')
         with zero.GatheredParameters([param]):
             param = param.data.detach().cpu().clone()
     else:
@@ -30,7 +35,8 @@ def maybe_zero_3(param, ignore_status=False, name=None):
 
 
 def get_mm_adapter_state_maybe_zero_3(named_params, keys_to_match):
-    to_return = {k: t for k, t in named_params if any(key_match in k for key_match in keys_to_match)}
+    # import pdb; pdb.set_trace()
+    to_return = {k: t for k, t in named_params if any(k == key or k.startswith(key + ".") or k == f"model.{key}" or k.startswith(f"model.{key}.") for key in keys_to_match)}
     to_return = {k: maybe_zero_3(v, ignore_status=True, name=k).cpu() for k, v in to_return.items()}
     return to_return
 
@@ -198,20 +204,36 @@ class LLaVATrainer(Trainer):
                     {
                         "params": [
                             p for n, p in opt_model.named_parameters()
-                            if (n in decay_parameters and n in projector_parameters and p.requires_grad)
+                            if (n in decay_parameters and n in projector_parameters and p.requires_grad and "dino" not in n)
                         ],
                         "weight_decay": self.args.weight_decay,
                         "lr": self.args.mm_projector_lr,
+                    },
+                    {
+                        "params": [
+                            p for n, p in opt_model.named_parameters()
+                            if (n in decay_parameters and n in projector_parameters and p.requires_grad and "dino" in n)
+                        ],
+                        "weight_decay": self.args.weight_decay,
+                        "lr": self.args.dino_mm_projector_lr,
                     },
 
                     # projector params without decay (mm_projector_lr)
                     {
                         "params": [
                             p for n, p in opt_model.named_parameters()
-                            if (n not in decay_parameters and n in projector_parameters and p.requires_grad)
+                            if (n not in decay_parameters and n in projector_parameters and p.requires_grad and "dino" not in n)
                         ],
                         "weight_decay": 0.0,
                         "lr": self.args.mm_projector_lr,
+                    },
+                    {
+                        "params": [
+                            p for n, p in opt_model.named_parameters()
+                            if (n not in decay_parameters and n in projector_parameters and p.requires_grad and "dino" in n)
+                        ],
+                        "weight_decay": 0.0,
+                        "lr": self.args.dino_mm_projector_lr,
                     },
                 ]
 
@@ -292,8 +314,15 @@ class LLaVATrainer(Trainer):
 
 # =========================================================================== #
 class RouterLLaVATrainer(Trainer):
-    aux_losses = []
+    def __init__(self, encoder_type, fusion_type_when_preparing_inputs, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.encoder_type = encoder_type
+        self.fusion_type = fusion_type_when_preparing_inputs
     
+
+    aux_losses = []
+    last_aux_loss: float = 0.0
+
     def get_aux_losses_sep(self):
         import json
         with open("/shared/nas2/sstoica2/LLaVA/aux_loss.json", 'w') as f:
@@ -301,9 +330,15 @@ class RouterLLaVATrainer(Trainer):
         return self.aux_losses
     
     def _get_train_sampler(self) -> Optional[torch.utils.data.Sampler]:
-        if self.train_dataset is None or not has_length(self.train_dataset):
+        # import pdb; pdb.set_trace()
+        if (self.train_dataset is None or not has_length(self.train_dataset)) and (self.train_dataset_dino is None or not has_length(self.train_dataset_dino)) :
             return None
+        
+        # # make dino training dataset the dataset if the main training dataset is not provided
+        # if self.train_dataset is None and self.train_dataset_dino is not None:
+        #     self.train_dataset = self.train_dataset_dino
 
+        # can I force the batch size for both clip and dino to be the same? 
         if self.args.group_by_modality_length:
             lengths = self.train_dataset.modality_lengths
             return LengthGroupedSampler(
@@ -324,7 +359,7 @@ class RouterLLaVATrainer(Trainer):
         """
         if is_sagemaker_mp_enabled():
             return super().create_optimizer()
-
+        # import pdb; pdb.set_trace()
         opt_model = self.model
 
         if self.optimizer is None:
@@ -334,10 +369,16 @@ class RouterLLaVATrainer(Trainer):
             router_parameters = [n for n, p in opt_model.named_parameters() if "router" in n and p.requires_grad]
 
             optimizer_grouped_parameters = []
-            if self.args.mm_projector_lr is not None:
+            if self.args.mm_projector_lr is not None or self.args.dino_mm_projector_lr is not None:
+                # set dino_mm_projector_lr aned mm_projector_lr equal if one is defined and not the other
+                if self.args.dino_mm_projector_lr is None:
+                    self.args.dino_mm_projector_lr = self.args.mm_projector_lr
+                if self.args.mm_projector_lr is None:
+                    self.args.mm_projector_lr = self.args.dino_mm_projector_lr
+                
                 projector_parameters = [name for name, _ in opt_model.named_parameters() if "mm_projector" in name]
                 optimizer_grouped_parameters = [
-                    # non-projector, non-scaling params with decay
+                    # non-projector, non-scaling, non-router params with decay
                     {
                         "params": [
                             p for n, p in opt_model.named_parameters()
@@ -350,7 +391,7 @@ class RouterLLaVATrainer(Trainer):
                     {
                         "params": [
                             p for n, p in opt_model.named_parameters()
-                            if (n in scalar_parameters and p.requires_grad)
+                            if (n in scalar_parameters and n not in router_parameters and p.requires_grad)
                         ],
                         "weight_decay": 0.0,
                         "lr": self.args.mm_projector_lr * 0.1,  # optional
@@ -369,20 +410,36 @@ class RouterLLaVATrainer(Trainer):
                     {
                         "params": [
                             p for n, p in opt_model.named_parameters()
-                            if (n in decay_parameters and n in projector_parameters and p.requires_grad)
+                            if (n in decay_parameters and n in projector_parameters and p.requires_grad and "dino" not in n)
                         ],
                         "weight_decay": self.args.weight_decay,
                         "lr": self.args.mm_projector_lr,
+                    },
+                    {
+                        "params": [
+                            p for n, p in opt_model.named_parameters()
+                            if (n in decay_parameters and n in projector_parameters and p.requires_grad and "dino" in n)
+                        ],
+                        "weight_decay": self.args.weight_decay,
+                        "lr": self.args.dino_mm_projector_lr,
                     },
 
                     # projector params without decay (mm_projector_lr)
                     {
                         "params": [
                             p for n, p in opt_model.named_parameters()
-                            if (n not in decay_parameters and n in projector_parameters and p.requires_grad)
+                            if (n not in decay_parameters and n in projector_parameters and p.requires_grad and "dino" not in n)
                         ],
                         "weight_decay": 0.0,
                         "lr": self.args.mm_projector_lr,
+                    },
+                    {
+                        "params": [
+                            p for n, p in opt_model.named_parameters()
+                            if (n not in decay_parameters and n in projector_parameters and p.requires_grad and "dino" in n)
+                        ],
+                        "weight_decay": 0.0,
+                        "lr": self.args.dino_mm_projector_lr,
                     },
                 ]
 
@@ -422,15 +479,21 @@ class RouterLLaVATrainer(Trainer):
                         ],
                         "weight_decay": 0.0,
                     },)
-            print("TRAINABLE OPTIMIZER")
+            rank0_print("TRAINABLE OPTIMIZER")
+            # import pdb; pdb.set_trace()
             id2name = {id(p): n for n, p in opt_model.named_parameters()}
             for gi, g in enumerate(optimizer_grouped_parameters):
+                if len(g["params"]) == 0:
+                    continue
                 lr = g.get("lr", self.args.learning_rate)
                 wd = g.get("weight_decay", 0.0)
-                print(f"\n=== group {gi}: lr={lr:.3e} wd={wd} ===")
+                try:
+                    rank0_print(f"\n=== group {gi}: lr={lr:.3e} wd={wd} ===")
+                except:
+                    import pdb; pdb.set_trace()
                 for p in g["params"]:
                     name = id2name.get(id(p), "<unknown>")
-                    print(" ", name)
+                    rank0_print(" ", name)
             # import sys; sys.exit(0)
             # all_group_params = set()
             # for group in optimizer_grouped_parameters:
@@ -482,15 +545,24 @@ class RouterLLaVATrainer(Trainer):
             self._save_optimizer_and_scheduler(output_dir)  # NOTE: save optimizer and scheduler states with deepspeed
 
             # Only save Adapter
-            keys_to_match = ['mm_projector', 'vision_resampler', 'router']
+            keys_to_match = ['mm_projector', 'vision_resampler', 'router_clip']
             if getattr(self.args, "use_im_start_end", False):
                 keys_to_match.extend(['embed_tokens', 'embed_in'])
 
             weight_to_save = get_mm_adapter_state_maybe_zero_3(self.model.named_parameters(), keys_to_match)
-
-            if self.args.local_rank == 0 or self.args.local_rank == -1:
+            if len(weight_to_save) > 0 and (self.args.local_rank == 0 or self.args.local_rank == -1):
                 self.model.config.save_pretrained(output_dir)
                 torch.save(weight_to_save, os.path.join(output_dir, f'mm_projector.bin'))
+            
+            keys_to_match = ['dino_mm_projector', 'router_dino']
+            if getattr(self.args, "use_im_start_end", False):
+                keys_to_match.extend(['embed_tokens', 'embed_in'])
+            
+            # import pdb; pdb.set_trace()
+            weight_to_save = get_mm_adapter_state_maybe_zero_3(self.model.named_parameters(), keys_to_match)
+            if (self.args.local_rank == 0 or self.args.local_rank == -1) and len(weight_to_save) > 0:
+                self.model.config.save_pretrained(output_dir)
+                torch.save(weight_to_save, os.path.join(output_dir, f'dino_mm_projector.bin'))
         else:
             super(RouterLLaVATrainer, self)._save_checkpoint(model, trial, metrics)
     
@@ -513,11 +585,29 @@ class RouterLLaVATrainer(Trainer):
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch: torch.Tensor | None = None):
         # print("============================= compute_loss =============================")
+        inputs["encoder_type"] = self.encoder_type
+        inputs["fusion_type"] = self.fusion_type
+        # input is of type dict dict_keys(['input_ids', 'labels', 'attention_mask', 'clip_texts', 'images', 'dino_images', 'encoder_type', 'interleave']) 
+        # import pdb; pdb.set_trace()
+        images = inputs['images'] 
+        dino_images = inputs['dino_images'] if 'dino_images' in inputs else None
+        if dino_images is None and "dino" in self.encoder_type: # I want to be very clear what images are being passed
+            dino_images = images
+            inputs['dino_images'] = dino_images
+            images = None
+            inputs['images'] = images
         outputs = model(**inputs)
         loss = outputs.loss
-        images = inputs.pop('images') # CHECK. I think it should exist because 'image' should be in instance[0] in /LLaVA/llava/train/train.py DataCollatorForSupervisedDataset
         # print("==================== progressing to get the aux_loss ====================")
-        load_balance_loss = model.get_aux_loss(images)
+        # import pdb; pdb.set_trace()
+        if images is not None and dino_images is not None:
+            load_balance_loss = model.get_aux_loss(images, dino_images)
+        else:
+            if dino_images is not None and images is None:
+                images = dino_images
+            load_balance_loss = model.get_aux_loss(images)
         self.aux_losses.append(load_balance_loss)
+        self.last_aux_loss = float(load_balance_loss.detach().cpu().item())
         loss += model.load_balance_alpha * load_balance_loss
+        assert torch.isnan(loss) == False, "Loss is NaN!"
         return (loss, outputs) if return_outputs else loss

@@ -18,7 +18,7 @@ from functools import partial
 from llava.constants import WORKER_HEART_BEAT_INTERVAL
 from llava.utils import (build_logger, server_error_msg,
     pretty_print_semaphore)
-from llava.model.builder import load_pretrained_model
+from llava.model.builder import load_pretrained_model, load_pretrained_model_router
 from llava.mm_utils import process_images, load_image_from_base64, tokenizer_image_token
 from llava.constants import IMAGE_TOKEN_INDEX, DEFAULT_IMAGE_TOKEN, DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN
 from transformers import TextIteratorStreamer
@@ -62,7 +62,31 @@ class ModelWorker:
 
         self.device = device
         logger.info(f"Loading the model {self.model_name} on worker {worker_id} ...")
-        self.tokenizer, self.model, self.image_processor, self.context_len = load_pretrained_model(
+        if args.use_router:
+            self.tokenizer, self.model, self.image_processor_dino, self.image_processor_clip, self.context_len = load_pretrained_model_router(
+                                                                                        model_path = args.model_path, 
+                                                                                        model_base = args.model_base, 
+                                                                                        model_name = model_name, 
+                                                                                        mm_use_text_enc = args.mm_use_text_enc,
+                                                                                        text_pool = args.text_pool,
+                                                                                        text_scale = args.text_scale,
+                                                                                        text_conditioning = args.text_conditioning,
+                                                                                        text_attention_type = args.text_attention_type, # "concat" or "qk"
+                                                                                        text_attention_dim = args.text_attention_dim,
+                                                                                        attn_level = args.attn_level,
+                                                                                        force_reserve_layer = args.force_reserve_layer,
+                                                                                        learnable_gate = args.learnable_gate,
+                                                                                        confidence_gate = args.confidence_gate,
+                                                                                        confidence_gate_threshold = args.confidence_gate_threshold,
+                                                                                        confidence_gate_slope = args.confidence_gate_slope,
+                                                                                        load_8bit=args.load_8bit, load_4bit=args.load_4bit, 
+                                                                                        device_map="auto", device=args.device, 
+                                                                                        use_flash_attn=False, num_layers_to_choose=1, 
+                                                                                        router_alpha=0.01, encoder_type =args.encoder_type, 
+                                                                                        fusion_type= args.fusion_type
+            )
+        else:
+            self.tokenizer, self.model, self.image_processor_dino, self.image_processor_clip, self.context_len = load_pretrained_model(
             model_path, model_base, self.model_name, load_8bit, load_4bit, device=self.device, use_flash_attn=use_flash_attn)
         self.is_multimodal = 'llava' in self.model_name.lower()
 
@@ -121,7 +145,7 @@ class ModelWorker:
 
     @torch.inference_mode()
     def generate_stream(self, params):
-        tokenizer, model, image_processor = self.tokenizer, self.model, self.image_processor
+        tokenizer, model, image_processor_clip, image_processor_dino = self.tokenizer, self.model, self.image_processor_clip, self.image_processor_dino
 
         prompt = params["prompt"]
         ori_prompt = prompt
@@ -134,12 +158,18 @@ class ModelWorker:
 
                 images = [load_image_from_base64(image) for image in images]
                 image_sizes = [image.size for image in images]
-                images = process_images(images, image_processor, model.config)
-
-                if type(images) is list:
-                    images = [image.to(self.model.device, dtype=torch.float16) for image in images]
-                else:
-                    images = images.to(self.model.device, dtype=torch.float16)
+                if "clip" in args.encoder_type:
+                    images_clip = process_images(images, image_processor_clip, model.config)
+                    if type(images_clip) is list:
+                        images_clip = [image.to(self.model.device, dtype=torch.float16) for image in images_clip]
+                    else:
+                        images_clip = images_clip.to(self.model.device, dtype=torch.float16)
+                if "dino" in args.encoder_type:
+                    images_dino = process_images(images, image_processor_dino, model.config)
+                    if type(images) is list:
+                        images_dino = [image.to(self.model.device, dtype=torch.float16) for image in images_dino]
+                    else:
+                        images_dino = images_dino.to(self.model.device, dtype=torch.float16)
 
                 replace_token = DEFAULT_IMAGE_TOKEN
                 if getattr(self.model.config, 'mm_use_im_start_end', False):
@@ -148,11 +178,13 @@ class ModelWorker:
 
                 num_image_tokens = prompt.count(replace_token) * model.get_vision_tower().num_patches
             else:
-                images = None
+                images_clip = None
+                images_dino = None
                 image_sizes = None
-            image_args = {"images": images, "image_sizes": image_sizes}
+            image_args = {"images": images_clip, "dino_images" : images_dino, "image_sizes": image_sizes}
         else:
-            images = None
+            images_clip = None
+            images_dino = None
             image_args = {}
 
         temperature = float(params.get("temperature", 1.0))
@@ -268,6 +300,18 @@ if __name__ == "__main__":
     parser.add_argument("--load-8bit", action="store_true")
     parser.add_argument("--load-4bit", action="store_true")
     parser.add_argument("--use-flash-attn", action="store_true")
+    parser.add_argument("--mm_use_text_enc", action="store_true")
+    parser.add_argument("--text_pool", type=str, default="mean")
+    parser.add_argument("--text_scale", type=float, default=1.0)
+    parser.add_argument("--text_conditioning", type=str, default="film")
+    parser.add_argument("--text_attention_type", type=str, default="concat")
+    parser.add_argument("--text_attention_dim", type=int, default=1024)
+    parser.add_argument("--attn_level", type=str, default="layer")
+    parser.add_argument("--force_reserve_layer", action="store_true")
+    parser.add_argument("--learnable_gate", action="store_true")
+    parser.add_argument("--confidence_gate", action="store_true")
+    parser.add_argument("--confidence_gate_threshold", type=float, default=0.6)
+    parser.add_argument("--confidence_gate_slope", type=float, default=10.0)
     args = parser.parse_args()
     logger.info(f"args: {args}")
 
