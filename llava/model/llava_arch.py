@@ -42,12 +42,16 @@ class LlavaMetaModel:
         super(LlavaMetaModel, self).__init__(config)
         if hasattr(config, "mm_vision_tower"):
             # import pdb; pdb.set_trace()
-            if "clip" in config.encoder_type:
-                self.vision_tower = build_vision_tower(config, load_model = "clip", delay_load=True)
-                self.mm_projector = build_vision_projector(config, type="clip")
             if "dino" in config.encoder_type:
                 self.dino_tower = build_vision_tower(config, load_model = "dino", delay_load=True)
                 self.dino_mm_projector = build_vision_projector(config, type="dino")
+            if "siglip" in config.encoder_type:
+                self.vision_tower = build_vision_tower(config, load_model = "siglip", delay_load=True)
+                self.mm_projector = build_vision_projector(config, type="clip")
+            if "siglip" not in config.encoder_type and "clip" in config.encoder_type:
+                self.vision_tower = build_vision_tower(config, load_model = "clip", delay_load=True)
+                self.mm_projector = build_vision_projector(config, type="clip")
+            
             
         if 'unpad' in getattr(config, 'mm_patch_merge_type', ''):
             self.image_newline = nn.Parameter(
@@ -73,7 +77,7 @@ class LlavaMetaModel:
 
     def get_vision_tower(self, load_model = "clip"):
         # import pdb; pdb.set_trace()
-        if load_model == "clip":
+        if load_model == "clip" or load_model == "siglip":
             vision_tower = getattr(self, 'vision_tower', None)
             if type(vision_tower) is list:
                 vision_tower = vision_tower[0]
@@ -106,7 +110,7 @@ class LlavaMetaModel:
         mm_vision_select_feature = model_args.mm_vision_select_feature
         pretrain_mm_mlp_adapter = None
         pretrain_dino_mm_mlp_adapter = None
-        if "clip" in self.encoder_type:
+        if ("clip" in model_args.encoder_type or "siglip" in model_args.encoder_type) :
             pretrain_mm_mlp_adapter = model_args.pretrain_mm_mlp_adapter
         if "dino" in self.encoder_type:
             pretrain_dino_mm_mlp_adapter = model_args.pretrain_dino_mm_mlp_adapter
@@ -116,6 +120,21 @@ class LlavaMetaModel:
         self.config.mm_vision_tower = vision_tower
         self.config.mm_use_text_enc = model_args.mm_use_text_enc
         self.config.vision_tower_delta = getattr(model_args, "vision_tower_delta", False)
+        
+        if "siglip" in self.encoder_type:
+            if self.get_vision_tower(load_model="siglip") is None:
+                vision_tower = build_vision_tower(model_args, load_model="siglip")
+
+                if fsdp is not None and len(fsdp) > 0:
+                    self.vision_tower = [vision_tower]
+                else:
+                    self.vision_tower = vision_tower
+            else:
+                if fsdp is not None and len(fsdp) > 0:
+                    vision_tower = self.vision_tower[0]
+                else:
+                    vision_tower = self.vision_tower
+                vision_tower.load_model()
 
         if "clip" in self.encoder_type:
             if self.get_vision_tower(load_model="clip") is None:
@@ -148,20 +167,20 @@ class LlavaMetaModel:
                 dino_tower.load_model()
         self.config.use_mm_proj = True
         self.config.mm_projector_type = getattr(model_args, 'mm_projector_type', 'linear') # can be ignored if using just Dino
-        if "clip" in self.encoder_type:
+        if "clip" in self.encoder_type or "siglip" in self.encoder_type:
             self.config.mm_hidden_size = vision_tower.hidden_size
         else:
             self.config.mm_hidden_size = self.config.hidden_size
-        if "clip" in self.encoder_type and getattr(self.config, "mm_use_text_enc", False) and hasattr(vision_tower, "get_text_tower"):
+        if ("clip" in self.encoder_type or "siglip" in self.encoder_type) and getattr(self.config, "mm_use_text_enc", False) and hasattr(vision_tower, "get_text_tower"):
             self.config.mm_text_hidden_size = vision_tower.get_text_tower().config.hidden_size
-        if "clip" in self.encoder_type:
+        if ("clip" in self.encoder_type or "siglip" in self.encoder_type):
             self.config.mm_vision_select_layer = mm_vision_select_layer
             self.config.mm_vision_select_feature = mm_vision_select_feature
         self.config.mm_patch_merge_type = mm_patch_merge_type
 
-        if "clip" in self.encoder_type:
+        if "clip" in self.encoder_type or "siglip" in self.encoder_type:
             if getattr(self, 'mm_projector', None) is None:
-                self.mm_projector = build_vision_projector(self.config, type="clip")
+                self.mm_projector = build_vision_projector(self.config, type="clip") # may need to make siglip analog
 
                 if 'unpad' in mm_patch_merge_type:
                     embed_std = 1 / torch.sqrt(torch.tensor(self.config.hidden_size, dtype=self.dtype))
@@ -194,8 +213,6 @@ class LlavaMetaModel:
             weights = torch.load(pretrain_mm_mlp_adapter, map_location='cpu')
             def get_w(weights, keyword):
                 return {k.split(keyword + '.')[1]: v for k, v in weights.items() if keyword in k}
-            def get_coefs(weights):
-                return {k:v for k,v in weights.items() if 'scaling_coef' in k}
 
             self.mm_projector.load_state_dict(get_w(weights, 'mm_projector'))
             rank0_print("============= Successfully updated pretrain_mm_mlp_adapter =============")
@@ -258,9 +275,10 @@ class LlavaMetaForCausalLM(ABC):
         # import pdb; pdb.set_trace()
         image_features = self.get_model().mm_projector(image_features) # image_features.requires_grad = True
         return image_features
+
     
-    def encode_images_withclip(self, images, text_embeds=None, text_attention_mask=None):
-        image_features_clip = self.get_model().get_vision_tower(load_model = "clip")(images)
+    def encode_images_withclip(self, images, text_embeds=None, text_attention_mask=None, type_encoder="clip"):
+        image_features_clip = self.get_model().get_vision_tower(load_model = type)(images)
         image_features_clip = self.get_model().mm_projector(image_features_clip)
         return image_features_clip
 
@@ -291,7 +309,7 @@ class LlavaMetaForCausalLM(ABC):
         # import pdb; pdb.set_trace()
         dino_vision_tower = None
         vision_tower = None
-        if "clip" in encoder_type:
+        if "clip" in encoder_type or  "siglip" in encoder_type:
             vision_tower = self.get_vision_tower()
         if "dino" in encoder_type:
             dino_vision_tower = self.get_dino_vision_tower()
@@ -321,7 +339,7 @@ class LlavaMetaForCausalLM(ABC):
                 and vision_tower is not None and hasattr(vision_tower, "text_tokenizer")
                 and vision_tower is not None and hasattr(vision_tower, "encode_text")
             )
-            if use_clip_text is False and "clip" in encoder_type:
+            if use_clip_text is False and ("clip" in encoder_type or "siglip" in encoder_type):
                 raise ValueError(" \n we are not using clip_texts. Was this intentional?")
             # print("\n use_clip_text = ", use_clip_text)
             use_dino_text = (
@@ -345,12 +363,22 @@ class LlavaMetaForCausalLM(ABC):
                     return " ".join(text.split())
 
                 clip_texts = [_sanitize_clip_text(t) for t in clip_texts]
-                clip_tokens = vision_tower.text_tokenizer(
-                    clip_texts,
-                    return_tensors="pt",
-                    padding=True,
-                    truncation=True,
-                )
+                if "siglip" in encoder_type:
+                    clip_tokens = vision_tower.text_tokenizer(
+                        clip_texts,
+                        return_tensors="pt",
+                        padding="max_length",
+                        max_length=64,
+                        truncation=True,
+                        return_attention_mask=True,
+                    )
+                else:
+                    clip_tokens = vision_tower.text_tokenizer(
+                        clip_texts,
+                        return_tensors="pt",
+                        padding=True,
+                        truncation=True,
+                    )
                 clip_input_ids = clip_tokens["input_ids"].to(device=vision_tower.device)
                 clip_attention_mask = clip_tokens.get("attention_mask", None)
                 if clip_attention_mask is not None:
@@ -391,7 +419,7 @@ class LlavaMetaForCausalLM(ABC):
                     attention_mask = torch.ones_like(input_ids, dtype=torch.bool)
                 text_attention_mask = attention_mask.bool()
                 text_attention_mask = text_attention_mask & (input_ids != IMAGE_TOKEN_INDEX)
-                if "clip" in encoder_type:
+                if "clip" in encoder_type or "siglip" in encoder_type:
                     text_attention_mask_clip = text_attention_mask
                 if "dino" in encoder_type:
                     text_attention_mask_dino = text_attention_mask
@@ -399,7 +427,7 @@ class LlavaMetaForCausalLM(ABC):
                 safe_input_ids = input_ids.clone()
                 safe_input_ids[safe_input_ids == IMAGE_TOKEN_INDEX] = pad_id
                 text_embeds = self.get_model().embed_tokens(safe_input_ids)
-                if "clip" in encoder_type:
+                if "clip" in encoder_type or "siglip" in encoder_type:
                     text_embeds_clip = text_embeds
                 if "dino" in encoder_type:
                     text_embeds_dino = text_embeds
@@ -426,8 +454,8 @@ class LlavaMetaForCausalLM(ABC):
 
             image_features_clip = None
             image_features_dino = None
-            if "clip" in encoder_type:
-                image_features_clip = self.encode_images_withclip(concat_images, text_embeds=text_embeds_clip, text_attention_mask=text_attention_mask_clip)
+            if "clip" in encoder_type or "siglip" in encoder_type:
+                image_features_clip = self.encode_images_withclip(concat_images, text_embeds=text_embeds_clip, text_attention_mask=text_attention_mask_clip, type_encoder="siglip" if "siglip" in encoder_type else "clip")
             if "dino" in encoder_type:
                 image_features_dino = self.encode_images_withdino(concat_dino_images, text_embeds=text_embeds_dino, text_attention_mask=text_attention_mask_dino)
             
@@ -527,8 +555,8 @@ class LlavaMetaForCausalLM(ABC):
             # import pdb; pdb.set_trace()
             image_features_clip = None
             image_features_dino = None
-            if "clip" in encoder_type:
-                image_features_clip = self.encode_images_withclip(images, text_embeds=text_embeds_clip, text_attention_mask=text_attention_mask_clip)
+            if "clip" in encoder_type or "siglip" in encoder_type:
+                image_features_clip = self.encode_images_withclip(images, text_embeds=text_embeds_clip, text_attention_mask=text_attention_mask_clip, type_encoder="siglip" if "siglip" in encoder_type else "clip") # torch.Size([32, 576, 5120])
             if "dino" in encoder_type:
                 image_features_dino = self.encode_images_withdino(dino_images, text_embeds=text_embeds_dino, text_attention_mask=text_attention_mask_dino) # torch.Size([32, 256, 1024])
         
@@ -596,7 +624,7 @@ class LlavaMetaForCausalLM(ABC):
                     cur_image_idx += 1
                     # at this point cur_image_features_clip is torch.Size([576, 5120]) while cur_image_features_dino is torch.Size([252, 5120])
                     # import pdb; pdb.set_trace()
-                    if "clip" in encoder_type and "dino" in encoder_type and cur_image_features_clip is not None and cur_image_features_dino is not None:
+                    if ("clip" in encoder_type or "siglip" in encoder_type) and "dino" in encoder_type and cur_image_features_clip is not None and cur_image_features_dino is not None:
                         # NOTE: we can not interleave because diff number of patches! Thus, we choose to concate and mean pool along 0th dimension.
                         # We can not follow dino txt implementation because it compresses dino features unto one token.
                         fusion_type = self.config.fusion_type # can be mean_pooling, concate_upsample or cross_attention

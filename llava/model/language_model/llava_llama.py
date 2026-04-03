@@ -247,16 +247,16 @@ class DoubleRouterLlavaLlamaForCausalLM(LlavaLlamaForCausalLM): # for both dino 
         assert image_features.requires_grad == True
         return image_features
 
-    def encode_images_withclip(self, images, text_embeds=None, text_attention_mask=None):
-        self.rank0_print(" \n ================== I AM IN ROUTER ENCODE IMAGES WITH CLIP ==================")
+    def encode_images_withclip(self, images, text_embeds=None, text_attention_mask=None, encoder_type="clip"):
+        self.rank0_print(f" \n ================== I AM IN ROUTER ENCODE IMAGES WITH CLIP using encoder {encoder_type}! ==================")
         # import pdb; pdb.set_trace()
-        vision_tower = self.get_model().get_vision_tower().vision_tower
+        vision_tower = self.get_model().get_vision_tower(load_model=type).vision_tower
         device = vision_tower.device
         dtype = vision_tower.dtype
         self.text_embeds_clip = text_embeds
         self.text_attention_mask_clip = text_attention_mask
         
-        if type(images) is list:
+        if encoder_type(images) is list:
             image_features = []
             for image in images:
                 image_features.append(vision_tower(image.to(device=device, dtype=dtype).unsqueeze(0), output_hidden_states=True).hidden_states)
@@ -266,16 +266,16 @@ class DoubleRouterLlavaLlamaForCausalLM(LlavaLlamaForCausalLM): # for both dino 
             hidden_states = torch.stack(list(image_forward_outs.hidden_states)) # [num_layers, batch_size, num_image_tokens, vision_hidden_dim]
         
         assert hidden_states.ndim == 4
-        image_features = self.router_clip(hidden_states[1:, :, :, :], text_embeds=text_embeds, text_attention_mask=text_attention_mask, type="clip") # do not want to include the embedding layer
+        image_features = self.router_clip(hidden_states[1:, :, :, :], text_embeds=text_embeds, text_attention_mask=text_attention_mask, type=encoder_type) # do not want to include the embedding layer
         assert image_features.requires_grad == True
         # import pdb; pdb.set_trace()
         image_features = self.get_model().mm_projector(image_features) # Just one project?
         # assert image_features.requires_grad == True
         return image_features
    
-    def get_router_probs_clip(self, hidden_states):
+    def get_router_probs_clip(self, hidden_states, encoder_type):
         hidden_states = torch.stack(list(hidden_states)) # [num_layers, batch_size, num_image_tokens, vision_hidden_dim]
-        router_probs = self.router_clip.router_probs(hidden_states[1:, :, :, :], text_embeds=self.text_embeds_clip, text_attention_mask=self.text_attention_mask_clip) # remove embedding
+        router_probs = self.router_clip.router_probs(hidden_states[1:, :, :, :], text_embeds=self.text_embeds_clip, text_attention_mask=self.text_attention_mask_clip, type=encoder_type) # remove embedding
         return router_probs
 
     def get_router_probs_dino(self, hidden_states):
@@ -285,7 +285,7 @@ class DoubleRouterLlavaLlamaForCausalLM(LlavaLlamaForCausalLM): # for both dino 
     
     def get_aux_loss(self, images, dino_images): #<- I need to pass in dino images
         # calculate the hidden states
-        # import pdb; pdb.set_trace()
+        import pdb; pdb.set_trace()
 
         load_balanace_loss_clip = None
         load_blanace_loss_dino = None
@@ -337,7 +337,7 @@ class RouterLlavaLlamaForCausalLM(LlavaLlamaForCausalLM):
         super().__init__(config)
         if encoder_type is None:
             encoder_type = getattr(config, 'encoder_type', 'clip')
-        if "clip" in encoder_type:
+        if "clip" in encoder_type or "siglip" in encoder_type:
             self.router_clip = router
         else:
             self.router_dino = router
@@ -386,14 +386,14 @@ class RouterLlavaLlamaForCausalLM(LlavaLlamaForCausalLM):
         # assert image_features.requires_grad == True
         return image_features
 
-    def encode_images_withclip(self, images, text_embeds=None, text_attention_mask=None):
-        self.rank0_print(" \n ================== I AM IN ROUTER ENCODE IMAGES WITH CLIP ==================")
-        vision_tower = self.get_model().get_vision_tower().vision_tower
+    def encode_images_withclip(self, images, text_embeds=None, text_attention_mask=None, type_encoder="clip"):
+        self.rank0_print(f" \n ================== I AM IN ROUTER ENCODE IMAGES WITH CLIP  using encoder {type_encoder}! ==================")
+        vision_tower = self.get_model().get_vision_tower(load_model=type_encoder).vision_tower
         device = vision_tower.device
         dtype = vision_tower.dtype
         self.text_embeds = text_embeds
         self.text_attention_mask = text_attention_mask
-        
+        assert text_embeds is not None, "We are using text conditioned routing, so please pass in the text embedings"
         if type(images) is list:
             image_features = []
             for image in images:
@@ -404,7 +404,8 @@ class RouterLlavaLlamaForCausalLM(LlavaLlamaForCausalLM):
             hidden_states = torch.stack(list(image_forward_outs.hidden_states)) # [num_layers, batch_size, num_image_tokens, vision_hidden_dim]
         
         assert hidden_states.ndim == 4
-        image_features = self.router_clip(hidden_states[1:, :, :, :], text_embeds=text_embeds, text_attention_mask=text_attention_mask, type="clip") # do not want to include the embedding layer
+        # import pdb; pdb.set_trace()
+        image_features = self.router_clip(hidden_states[1:, :, :, :], text_embeds=text_embeds, text_attention_mask=text_attention_mask, type=type_encoder) # do not want to include the embedding layer
         assert image_features.requires_grad == True
         # import pdb; pdb.set_trace()
         image_features = self.get_model().mm_projector(image_features) # Just one project?
@@ -414,8 +415,8 @@ class RouterLlavaLlamaForCausalLM(LlavaLlamaForCausalLM):
     def get_router_probs(self, hidden_states):
         if not isinstance(hidden_states, (torch.Tensor)):
             hidden_states = torch.stack(list(hidden_states)) # [num_layers, batch_size, num_image_tokens, vision_hidden_dim]
-        if self.encoder_type == "clip":
-            router_probs = self.router_clip.router_probs(hidden_states[1:, :, :, :], text_embeds=self.text_embeds, text_attention_mask=self.text_attention_mask) # remove embedding
+        if self.encoder_type == "clip" or "siglip" in self.encoder_type:
+            router_probs = self.router_clip.router_probs(hidden_states[1:, :, :, :], text_embeds=self.text_embeds, text_attention_mask=self.text_attention_mask, type=self.encoder_type) # remove embedding
         else:
             router_probs = self.router_dino.router_probs(hidden_states, text_embeds=self.text_embeds, text_attention_mask=self.text_attention_mask) # [24, 32, 257, 1024]
         return router_probs
@@ -426,7 +427,7 @@ class RouterLlavaLlamaForCausalLM(LlavaLlamaForCausalLM):
         # import pdb; pdb.set_trace()
         cached_router_probs_clip = None
         cached_router_probs_dino = None
-        if "clip" in self.encoder_type:
+        if "clip" in self.encoder_type or "siglip" in self.encoder_type:
             cached_router_probs_clip = getattr(self.router_clip, "_latest_router_probs_for_aux_clip", None)
         if "dino" in self.encoder_type:
             cached_router_probs_dino = getattr(self.router_dino, "_latest_router_probs_for_aux_dino", None)
@@ -436,8 +437,12 @@ class RouterLlavaLlamaForCausalLM(LlavaLlamaForCausalLM):
         if cached_router_probs_dino is not None:
             return self.router_dino.load_balance_loss(cached_router_probs_dino)
         
-        if "clip" in self.encoder_type:
-            vision_tower = self.get_model().get_vision_tower(load_model = "clip").vision_tower
+        if "clip" in self.encoder_type or "siglip" in self.encoder_type:
+            if "clip" in self.encoder_type:
+                load_model = "clip"
+            else:
+                load_model = "siglip"
+            vision_tower = self.get_model().get_vision_tower(load_model = load_model).vision_tower
             device = vision_tower.device
             dtype = vision_tower.dtype
         else:
@@ -454,7 +459,7 @@ class RouterLlavaLlamaForCausalLM(LlavaLlamaForCausalLM):
                     image_forward_outs = vision_tower(image.to(device=device, dtype=dtype), output_hidden_states=True) # all 25 layers have  torch.Size([32, 577, 1024])
                     hidden_states = image_forward_outs.hidden_states
                 router_probs = self.get_router_probs(hidden_states)
-                if self.encoder_type == "clip":
+                if self.encoder_type == "clip" or "siglip" in self.encoder_type:
                     losses.append(self.router_clip.load_balance_loss(router_probs))
                 else:
                     losses.append(self.router_dino.load_balance_loss(router_probs))
@@ -468,7 +473,7 @@ class RouterLlavaLlamaForCausalLM(LlavaLlamaForCausalLM):
                 image_forward_outs = vision_tower(images.to(device=device, dtype=dtype), output_hidden_states=True) # all 25 layers have  torch.Size([32, 577, 1024])
                 hidden_states = image_forward_outs.hidden_states
             router_probs = self.get_router_probs(hidden_states)
-            if self.encoder_type == "clip":
+            if self.encoder_type == "clip" or "siglip" in self.encoder_type:
                 loss = self.router_clip.load_balance_loss(router_probs)
             else:
                 loss = self.router_dino.load_balance_loss(router_probs)

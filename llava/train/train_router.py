@@ -947,7 +947,7 @@ class LazySupervisedDataset(Dataset):
             image_file = self.list_data_dict[i]['image']
             image_folder = self.data_args.image_folder
             # print("self.for_model : ", self.for_model)
-            if self.for_model == "clip":
+            if self.for_model == "clip" or self.load_model == "siglip":
                 processor = self.data_args.image_processor_clip # need to know when to process for dino and when to process for clip
             else:
                 processor = self.data_args.image_processor_dino
@@ -992,7 +992,7 @@ class LazySupervisedDataset(Dataset):
             data_dict['image'] = image
         elif self.data_args.is_multimodal:
             # image does not exist in the data, but the model is multimodal
-            if self.for_model == "clip":
+            if self.for_model == "clip" or self.load_model == "siglip":
                 processor = self.data_args.image_processor_clip # need to know when to process for dino and when to process for clip
                 crop_size = processor.crop_size
                 data_dict['image'] = torch.zeros(3, crop_size['height'], crop_size['width'])
@@ -1055,7 +1055,7 @@ def make_supervised_data_module(tokenizer: transformers.PreTrainedTokenizer,
     """Make dataset and collator for supervised fine-tuning."""
     # import pdb; pdb.set_trace()
     train_dataset = None
-    if "clip" in encoder_type:
+    if "clip" in encoder_type or "siglip" in encoder_type:
         train_dataset = LazySupervisedDataset(tokenizer=tokenizer,
                                     data_path=data_args.data_path,
                                     data_args=data_args)
@@ -1118,7 +1118,7 @@ def train(attn_implementation=None):
         config.encoder_type = model_args.encoder_type
         if 'mpt' in model_args.model_name_or_path:
             config.attn_config['attn_impl'] = training_args.mpt_attn_impl
-            if "clip" in model_args.encoder_type and "dino" in model_args.encoder_type:
+            if ("clip" in model_args.encoder_type or "siglip" in model_args.encoder_type)  and "dino" in model_args.encoder_type:
                 model = DoubleRouterLlavaMptForCausalLM.from_pretrained(
                      model_args.model_name_or_path,
                     config=config,
@@ -1136,7 +1136,7 @@ def train(attn_implementation=None):
         else:
             # import pdb; pdb.set_trace()
             # router is being passed in somewhere
-            if "clip" in model_args.encoder_type  and "dino" in model_args.encoder_type:
+            if ("clip" in model_args.encoder_type or "siglip" in model_args.encoder_type)  and "dino" in model_args.encoder_type:
                 model = DoubleRouterLlavaLlamaForCausalLM.from_pretrained(
                     model_args.model_name_or_path,
                     config=config, # need to add this in or else it gets re-initialized
@@ -1236,7 +1236,7 @@ def train(attn_implementation=None):
             conversation_lib.default_conversation = conversation_lib.conv_templates["vicuna_v1"]
 
     if model_args.vision_tower is not None:
-        # pdb.set_trace()
+        # import pdb; pdb.set_trace()
         model.get_model().initialize_vision_modules(
             model_args=model_args,
             fsdp=training_args.fsdp
@@ -1245,7 +1245,7 @@ def train(attn_implementation=None):
         # pdb.set_trace()
         vision_tower = None
         dino_tower = None
-        if "clip" in model_args.encoder_type:
+        if ("clip" in model_args.encoder_type or "siglip" in model_args.encoder_type):
             vision_tower = model.get_vision_tower()
             vision_tower.to(dtype=torch.bfloat16 if training_args.bf16 else torch.float16, device=training_args.device)
         if "dino" in model_args.encoder_type:
@@ -1270,6 +1270,7 @@ def train(attn_implementation=None):
         model.config.attn_level = model_args.attn_level
         if model_args.use_text_conditioned_router and model_args.use_text_only_gating:
             raise ValueError("use_text_conditioned_router and use_text_only_gating are mutually exclusive.")
+        # import pdb; pdb.set_trace()
         if (model_args.use_text_conditioned_router or model_args.use_text_only_gating) and getattr(model.config, "mm_text_hidden_size", None) is None:
             text_hidden_size = getattr(model.config, "hidden_size", None)
             if text_hidden_size is None:
@@ -1294,7 +1295,9 @@ def train(attn_implementation=None):
             image_size = vision_tower.vision_tower.config.image_size
             patch_size = vision_tower.vision_tower.config.patch_size
             hidden_size = vision_tower.vision_tower.config.hidden_size
-            num_image_tokens = (image_size // patch_size)**2 + 1 # 257 even for dino txt, which has 4 registers
+            num_image_tokens = (image_size // patch_size)**2 
+            if model_args.encoder_type == "clip":
+                num_image_tokens += 1# 257 even for dino txt, which has 4 registers
             router_clip_weights = torch.zeros((num_image_tokens, hidden_size)).to(dtype=torch.bfloat16 if training_args.bf16 else torch.float16, device=training_args.device)
         # router_weights = None
         # print("model.config.mm_vision_select_feature: ", model.config.mm_vision_select_feature) # patch
@@ -1309,7 +1312,7 @@ def train(attn_implementation=None):
             router_cls = Router
         # import pdb; pdb.set_trace()
         if model_args.use_text_conditioned_router:
-            if "clip" in model_args.encoder_type:
+            if ("clip" in model_args.encoder_type or "siglip" in model_args.encoder_type):
                 model.router_clip = router_cls(
                     model.config,
                     router_clip_weights,
@@ -1348,7 +1351,7 @@ def train(attn_implementation=None):
                     confidence_gate_slope=model_args.confidence_gate_slope,
                 )
         elif model_args.use_text_only_gating:
-            if "clip" in model_args.encoder_type:
+            if ("clip" in model_args.encoder_type or "siglip" in model_args.encoder_type):
                 model.router_clip = router_cls(
                     model.config,
                     router_clip_weights,
@@ -1379,7 +1382,7 @@ def train(attn_implementation=None):
                     confidence_gate_slope=model_args.confidence_gate_slope,
                 )
         else:
-            if "clip" in model_args.encoder_type:
+            if ("clip" in model_args.encoder_type or "siglip" in model_args.encoder_type):
                 model.router_clip = router_cls(
                     model.config,
                     router_clip_weights,
@@ -1402,7 +1405,7 @@ def train(attn_implementation=None):
                     confidence_gate_slope=model_args.confidence_gate_slope,
                 )
         # chooses which layers to apply the router 
-        if "clip" in model_args.encoder_type:
+        if ("clip" in model_args.encoder_type or "siglip" in model_args.encoder_type):
             model.router_clip.num_layers_to_choose = model_args.num_layers_to_choose
             model.router_clip.force_reserve_layer = model_args.force_reserve_layer
             model.router_clip.reserve_layer =  model_args.reserve_layer
@@ -1453,7 +1456,7 @@ def train(attn_implementation=None):
             if num_layers_clip is None and num_layers_dino is None:
                 raise ValueError("Unable to infer vision layer count for TextOnlyRouter.")
             
-            if "clip" in model_args.encoder_type:
+            if ("clip" in model_args.encoder_type or "siglip" in model_args.encoder_type):
                 model.router_clip._maybe_init_text_router(
                     num_layers_clip,
                     device=training_args.device,
@@ -1496,7 +1499,7 @@ def train(attn_implementation=None):
         if dino_tower is not None:
             data_args.image_processor_dino = dino_tower.image_processor
         
-        if "clip" in model_args.encoder_type:
+        if ("clip" in model_args.encoder_type or "siglip" in model_args.encoder_type):
             assert data_args.image_processor_clip is not None
         if "dino" in model_args.encoder_type:
             assert data_args.image_processor_dino is not None

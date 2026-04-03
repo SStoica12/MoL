@@ -39,7 +39,15 @@ def build_vision_tower(vision_tower_cfg, load_model = "clip", **kwargs):
     use_text_enc = getattr(vision_tower_cfg, "mm_use_text_enc", getattr(vision_tower_cfg, "use_text_enc", False))
     rank0_print("use_text_enc : ", use_text_enc)
     # import pdb; pdb.set_trace()
-    if vision_tower_dino is not None and load_model != "clip":
+    if load_model == "siglip":
+        from .siglip_encoder import SiglipVisionTower, SiglipVisionTextTower
+        if not use_text_enc:
+            rank0_print("\n Loading SiglipVisionTower")
+            return SiglipVisionTower(vision_tower_clip, args=vision_tower_cfg, **kwargs)
+        else:
+            rank0_print("\n Loaded SiglipVisionTextTower")
+            return SiglipVisionTextTower(vision_tower_clip, args=vision_tower_cfg, **kwargs)
+    elif vision_tower_dino is not None and load_model != "clip":
         if not use_text_enc:
             rank0_print("\n Loading DinoVisionTower")
             return DINOVisionTower(vision_tower_dino, args=vision_tower_cfg, **kwargs)

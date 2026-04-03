@@ -419,7 +419,7 @@ class Router(nn.Module):
         k = self.num_layers_to_choose
         self.num_layers = L
         router_probs = self.router_probs(hidden_states)
-        if type == "clip":
+        if type == "clip" or "siglip" in type:
             self._latest_router_probs_for_aux_clip = router_probs
         else:
             self._latest_router_probs_for_aux_dino = router_probs
@@ -555,7 +555,7 @@ class TextConditionedRouter(Router):
         return None
 
     def _infer_text_hidden_size(self, config):
-        if "clip" in config.encoder_type:
+        if "clip" in config.encoder_type or "siglip" in config.encoder_type:
             for name in ("mm_text_hidden_size", "text_hidden_size"):
                 value = getattr(config, name, None)
                 if value is not None:
@@ -712,7 +712,9 @@ class TextConditionedRouter(Router):
             q = self.text_attn_q(text_summary)
             k = self.text_attn_k(hidden_states)  # [L, B, N, D]
             scores = (k * q.unsqueeze(0).unsqueeze(2)).sum(dim=-1) * self.text_attn_scale  # [L, B, N]
-
+        rank0_print("\n ====== q.min()", q.min(), "q.max()", q.max())
+        rank0_print("\n ====== k.min()", k.min(), "k.max()", k.max())
+        rank0_print("\n ====== scores.min()", scores.min(), "scores.max()", scores.max())
         # Reorder for per-patch routing: softmax over layers for each (B, N).
         # import pdb; pdb.set_trace()
         scores = scores.permute(1, 2, 0).to(torch.float32)  # [B, N, L] <- only part that really diff
@@ -746,6 +748,8 @@ class TextConditionedRouter(Router):
                     gate_logits = self.reserve_gate(reserve_hidden).squeeze(-1) # min is -2.4062 and max is 1.4141
                 except:
                     gate_logits = self.reserve_gate.to(torch.float32)(reserve_hidden).squeeze(-1)
+                rank0_print("\n ====== gate_logits.min()", gate_logits.min(), "gate_logits.max()", gate_logits.max())
+                rank0_print("\n ================================================")
                 reserve_layer_prob = torch.sigmoid(gate_logits)  # [B, N] # min is 0 and max is 0.0935
             else:
                 conf = non_reserved_probs.max(dim=-1).values
@@ -857,7 +861,7 @@ class TextConditionedRouter(Router):
                 hidden_states, text_embeds, text_attention_mask
             )
             # Cache the per-patch router probabilities for auxiliary loss.
-            if type == "clip":
+            if type == "clip" or type == "siglip":
                 self._latest_router_probs_for_aux_clip = {
                     "kind": "patch_layer",
                     "router_probs": router_probs,
@@ -905,7 +909,7 @@ class TextConditionedRouter(Router):
         k = self.num_layers_to_choose
         self.num_layers = L
         router_probs = self.router_probs(hidden_states, text_embeds, text_attention_mask)
-        if type == "clip" :
+        if type == "clip" or type == "siglip":
             self._latest_router_probs_for_aux_clip = router_probs
         else:
             self._latest_router_probs_for_aux_dino = router_probs
@@ -914,7 +918,7 @@ class TextConditionedRouter(Router):
             layers, probs, reserve_layer_prob = self.get_layer_and_scaling_probs(router_probs)
         else:
             layers, probs = self.get_layer_and_scaling_probs(router_probs)
-        if type == "clip":
+        if type == "clip" or type == "siglip":
             self.layers_clip = layers
         if type == "dino":
             self.layers_dino = layers
@@ -997,7 +1001,7 @@ class TextOnlyRouter(Router):
                 self.text_to_router = self.text_to_router.to(device=device, dtype=dtype)
 
     def _infer_text_hidden_size(self, config):
-        if "clip" in config.encoder_type:
+        if "clip" in config.encoder_type or "siglip" in config.encoder_type:
             for name in ("mm_text_hidden_size", "text_hidden_size"):
                 value = getattr(config, name, None)
                 if value is not None:
@@ -1124,7 +1128,7 @@ class TextOnlyRouter(Router):
         k = self.num_layers_to_choose
         self.num_layers = L
         router_probs = self.router_probs(hidden_states, text_embeds, text_attention_mask)
-        if type == "clip":
+        if type == "clip" or type == "siglip":
             self._latest_router_probs_for_aux_clip = router_probs
         else:
             self._latest_router_probs_for_aux_dino = router_probs
