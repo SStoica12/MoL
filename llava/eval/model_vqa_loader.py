@@ -134,6 +134,7 @@ class CustomDataset(Dataset):
     def __getitem__(self, index):
         line = self.questions[index]
         image_file = line["image"]
+        print("type(image_files): ", type(image_file), "image_file: ", image_file)
         qs = line["text"]
         if self.model_config.mm_use_im_start_end:
             qs = DEFAULT_IM_START_TOKEN + DEFAULT_IMAGE_TOKEN + DEFAULT_IM_END_TOKEN + '\n' + qs
@@ -147,6 +148,8 @@ class CustomDataset(Dataset):
         
         image_tensor_clip = None
         image_tensor_dino = None
+        path = os.path.join(self.image_folder, image_file)
+        assert os.path.exists(path), f"Image file not found: {path}"
         image = Image.open(os.path.join(self.image_folder, image_file)).convert('RGB')
         if self.image_processor_clip is not None:
             # rank0_print("\n processing image with CLIP processor")
@@ -187,6 +190,7 @@ def collate_fn(batch):
 def create_data_loader(questions, image_folder, tokenizer, image_processor_dino, image_processor_clip, model_config, batch_size=1, num_workers=4):
     # rank0_print("\n image_processor_clip is None" if image_processor_clip is None else "image_processor_clip is not None", "image_processor_dino is None" if image_processor_dino is None else "image_processor_dino is not None")
     assert batch_size == 1, "batch_size must be 1"
+    rank0_print("image_folder : ", image_folder)
     dataset = CustomDataset(questions, image_folder, tokenizer, image_processor_dino, image_processor_clip, model_config)
     data_loader = DataLoader(dataset, batch_size=batch_size, num_workers=num_workers, shuffle=False, collate_fn=collate_fn)
     return data_loader
@@ -602,9 +606,10 @@ def eval_model(args):
                                                         )
     else:
         rank0_print("\n      not using router")
-        tokenizer, model, image_processor, context_len = load_pretrained_model(model_path=model_path, 
+        tokenizer, model, image_processor_dino, image_processor_clip, context_len = load_pretrained_model(model_path=model_path, 
                                                                                model_base=args.model_base, 
-                                                                               model_name=model_name)
+                                                                               model_name=model_name,
+                                                                               encoder_type=args.encoder_type,)
 
     verify_loaded_model(model, model_path)
     # import sys; sys.exit(0)

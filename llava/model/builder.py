@@ -53,6 +53,7 @@ def load_pretrained_model_router(model_path, model_base, model_name,
                                 fusion_type= "cross_attn", 
                                 **kwargs):
     rank0_print(f"\n      num_layers_to_choose is {num_layers_to_choose} and router_alpha is {0.01} and device_map {device_map}")
+    rank0_print("\n model_base is None : ", model_base is None)
     kwargs = {"device_map": device_map, **kwargs}
     if device != "cuda":
         kwargs['device_map'] = {"": device}
@@ -405,7 +406,7 @@ def load_pretrained_model_router(model_path, model_base, model_name,
     return tokenizer, model, image_processor_dino, image_processor_clip, context_len
 
 
-def load_pretrained_model(model_path, model_base, model_name, load_8bit=False, load_4bit=False, device_map="auto", device="cuda", use_flash_attn=False, encoder_type="clip", **kwargs):
+def load_pretrained_model(model_path, model_base, model_name, encoder_type ="dinov2_txt", load_8bit=False, load_4bit=False, device_map="auto", device="cuda", use_flash_attn=False, **kwargs):
     kwargs = {"device_map": device_map, **kwargs}
 
     if device != "cuda":
@@ -429,6 +430,7 @@ def load_pretrained_model(model_path, model_base, model_name, load_8bit=False, l
     # import pdb; pdb.set_trace()
     if 'llava' in model_name.lower():
         # Load LLaVA model
+        # import pdb; pdb.set_trace()
         if 'lora' in model_name.lower() and model_base is None:
             warnings.warn('There is `lora` in model name but no `model_base` is provided. If you are loading a LoRA model, please provide the `model_base` argument. Detailed instruction: https://github.com/haotian-liu/LLaVA#launch-a-model-worker-lora-weights-unmerged.')
         if 'lora' in model_name.lower() and model_base is not None:
@@ -484,6 +486,15 @@ def load_pretrained_model(model_path, model_base, model_name, load_8bit=False, l
             mm_projector_weights = {k: v.to(torch.float16) for k, v in mm_projector_weights.items()}
             model.load_state_dict(mm_projector_weights, strict=False)
         else:
+            import transformers
+            cfg_pretrained = transformers.AutoConfig.from_pretrained(model_path, trust_remote_code=True)
+            cfg_pretrained.mm_hidden_size_dino = 1024
+            cfg_pretrained.attention_bias = False
+            cfg_pretrained.attention_dropout = 0.0
+            cfg_pretrained.rope_theta = 10000.0
+            cfg_pretrained.encoder_type = encoder_type
+            cfg_pretrained.mm_vision_select_layer = -2
+
             if 'mpt' in model_name.lower():
                 tokenizer = AutoTokenizer.from_pretrained(model_path, use_fast=True)
                 model = LlavaMptForCausalLM.from_pretrained(model_path, low_cpu_mem_usage=True, **kwargs)
@@ -492,6 +503,7 @@ def load_pretrained_model(model_path, model_base, model_name, load_8bit=False, l
                 model = LlavaMistralForCausalLM.from_pretrained(
                     model_path,
                     low_cpu_mem_usage=True,
+                    config=cfg_pretrained,
                     **kwargs
                 )
             else:
@@ -499,6 +511,7 @@ def load_pretrained_model(model_path, model_base, model_name, load_8bit=False, l
                 model = LlavaLlamaForCausalLM.from_pretrained(
                     model_path,
                     low_cpu_mem_usage=True,
+                    config=cfg_pretrained,
                     **kwargs
                 )
     else:
@@ -582,11 +595,11 @@ def load_pretrained_model(model_path, model_base, model_name, load_8bit=False, l
         if device_map != 'auto':
             vision_tower.to(device=device_map, dtype=torch.float16)
         
-        image_processor = vision_tower.image_processor
+        # image_processor = vision_tower.image_processor
 
     if hasattr(model.config, "max_sequence_length"):
         context_len = model.config.max_sequence_length
     else:
         context_len = 2048
-
+    # import pdb; pdb.set_trace()
     return tokenizer, model, image_processor_dino, image_processor_clip, context_len

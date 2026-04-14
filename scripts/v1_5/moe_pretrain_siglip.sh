@@ -1,7 +1,7 @@
 #!/bin/bash
-# export WANDB_ENTITY="uiucnlp"
+export WANDB_ENTITY="uiucnlp"
 export WANDB_PROJECT="mixture-of-layers"
-export WANDB_NAME="MoL_siglip_pretrain_text-cond-attn-token-router_pretrain_fixed"
+export WANDB_NAME="MoL_siglip_pretrain_text-cond-attn-token-router_pretrain_fixed_siglip_k=4"
 export WANDB_MODE="online"  # ensure it uploads
 # export WANDB_DIR="/shared/nas2/jk100/MoL/scripts/v1_5/wandb" - where to store wandb logs
 
@@ -9,10 +9,10 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 DEEPSPEED_CONFIG="${DEEPSPEED_CONFIG:-${REPO_ROOT}/scripts/zero2.json}"
 DATA_PATH="${DATA_PATH:-/shared/nas/data/m1/sstoica2/.cache/huggingface/.cache/huggingface/datasets--Blip/blip_laion_cc_sbu_558k.json}"
 IMAGE_FOLDER="${IMAGE_FOLDER:-/shared/nas/data/m1/sstoica2/.cache/huggingface/.cache/huggingface/datasets--Blip/images}"
-OUTPUT_DIR="${OUTPUT_DIR:-${REPO_ROOT}/checkpoints/llava-v1.5-13b-moe-pretrain_2e-4_text-cond-attn-token-router_pretrain_siglip_update_code}"
+OUTPUT_DIR="${OUTPUT_DIR:-${REPO_ROOT}/checkpoints/llava-v1.5-13b-moe-pretrain_2e-4_text-cond-attn-token-router_pretrain_siglip_update_code_k=4}"
 # CUDA_VISIBLE_DEVICES=0,1,2,3 deepspeed
 # deepspeed --include localhost:0
-deepspeed --include localhost:0 "${REPO_ROOT}/llava/train/train_mem_router.py" \
+deepspeed --include localhost:2 "${REPO_ROOT}/llava/train/train_mem_router.py" \
     --deepspeed "${DEEPSPEED_CONFIG}" \
     --model_name_or_path lmsys/vicuna-13b-v1.5 \
     --version plain \
@@ -24,7 +24,7 @@ deepspeed --include localhost:0 "${REPO_ROOT}/llava/train/train_mem_router.py" \
     --tune_residual_scaling_coef False \
     --freeze_backbone True \
     --mm_vision_select_layer -2 \
-    --num_layers_to_choose 1 \
+    --num_layers_to_choose 4 \
     --mm_use_im_start_end False \
     --mm_use_im_patch_token False \
     --mm_use_text_enc True \

@@ -56,17 +56,40 @@ class ModelArguments:
     version: Optional[str] = field(default="v0")
     freeze_backbone: bool = field(default=False)
     tune_mm_mlp_adapter: bool = field(default=False)
+    tune_encoder_layers: bool = field(default=False)
     tune_residual_scaling_coef: bool = field(default=False)
     vision_tower: Optional[str] = field(default=None)
     mm_vision_select_layer: Optional[int] = field(default=-1)   # default to the last layer
     pretrain_mm_mlp_adapter: Optional[str] = field(default=None) # will include scaling coefs
+    pretrain_dino_mm_mlp_adapter: Optional[str] = field(default=None)
     mm_projector_type: Optional[str] = field(default='linear')
     mm_use_im_start_end: bool = field(default=False)
     mm_use_im_patch_token: bool = field(default=True)
     mm_patch_merge_type: Optional[str] = field(default='flat')
     mm_vision_select_feature: Optional[str] = field(default="patch")
-    mm_use_text_enc: bool = field(default=False)  # for using image-aligned CLIP text encoder
-
+    vision_tower_delta: bool = field(default=False)
+    num_layers_to_choose: Optional[int] = field(default=1)
+    mm_use_text_enc: Optional[bool] = True
+    use_text_conditioned_router: bool = False
+    use_text_only_gating: bool = False
+    text_pool: Optional[str] = "mean"
+    text_scale: float = 1.0
+    text_conditioning: Optional[str] = "film"
+    text_attention_type: Optional[str] = "concat"
+    text_attention_dim: Optional[int] = 1024
+    attn_level: Optional[str] = "layer"
+    force_reserve_layer: bool = False
+    reserve_layer : int = -2
+    save_router_stats : bool = True
+    save_steps_router_stats : int = 89
+    cap_softmax: bool = False
+    cap_softmax_value: float = 0.06
+    learnable_gate: bool = False
+    confidence_gate: bool = False
+    confidence_gate_threshold: float = 0.6
+    confidence_gate_slope: float = 10.0
+    encoder_type: str = "clip"
+    fusion_type: str = "cross_attn" # options: cross_attn, mean_pooling, concate_upsample
 
 @dataclass
 class DataArguments:
@@ -112,6 +135,7 @@ class TrainingArguments(transformers.TrainingArguments):
     lora_weight_path: str = ""
     lora_bias: str = "none"
     mm_projector_lr: Optional[float] = None
+    dino_mm_projector_lr: Optional[float] = None
     group_by_modality_length: bool = field(default=False)
 
 
@@ -163,16 +187,23 @@ def get_peft_state_non_lora_maybe_zero_3(named_params, require_grad_only=True):
     return to_return
 
 
+# def get_mm_adapter_state_maybe_zero_3(named_params, keys_to_match):
+#     import pdb; pdb.set_trace()
+#     to_return = {k: t for k, t in named_params if any(key_match in k for key_match in keys_to_match)}
+#     to_return = {k: maybe_zero_3(v, ignore_status=True).cpu() for k, v in to_return.items()}
+#     return to_return
+
 def get_mm_adapter_state_maybe_zero_3(named_params, keys_to_match):
-    to_return = {k: t for k, t in named_params if any(key_match in k for key_match in keys_to_match)}
-    to_return = {k: maybe_zero_3(v, ignore_status=True).cpu() for k, v in to_return.items()}
+    # import pdb; pdb.set_trace()
+    to_return = {k: t for k, t in named_params if any(k == key or k.startswith(key + ".") or k == f"model.{key}" or k.startswith(f"model.{key}.") for key in keys_to_match)}
+    to_return = {k: maybe_zero_3(v, ignore_status=True, name=k).cpu() for k, v in to_return.items()}
     return to_return
 
 
 def find_all_linear_names(model):
     cls = torch.nn.Linear
     lora_module_names = set()
-    multimodal_keywords = ['mm_projector', 'vision_tower', 'vision_resampler']
+    multimodal_keywords = ['mm_projector', 'dino_mm_projector', 'vision_tower', 'vision_resampler', 'router']
     for name, module in model.named_modules():
         if any(mm_keyword in name for mm_keyword in multimodal_keywords):
             continue
@@ -190,33 +221,60 @@ def safe_save_model_for_hf_trainer(trainer: transformers.Trainer,
     """Collects the state dict and dump to disk."""
 
     if getattr(trainer.args, "tune_mm_mlp_adapter", False):
+        # print("=============== I AM IN KEYS TO MATCH ===============")
         # Only save Adapter and scaling coefs
-        keys_to_match = ['mm_projector', 'scaling_coef']
-        if getattr(trainer.args, "use_im_start_end", False):
-            keys_to_match.extend(['embed_tokens', 'embed_in'])
-        # save also residuals if being trained
-        #if getattr(trainer.args, "tune_residual_scaling_coef", False):
-        # keys_to_match.extend(['scaling_coef'])
+        # import pdb; pdb.set_trace()
+        if hasattr(trainer.model, 'mm_projector') or hasattr(trainer.model.model, 'mm_projector'):
+            keys_to_match = ['mm_projector', 'router_clip'] ## CHECK
+            if getattr(trainer.args, "tune_residual_scaling_coef", False):
+                keys_to_match.extend(['scaling_coef'])
+            if getattr(trainer.args, "use_im_start_end", False):
+                keys_to_match.extend(['embed_tokens', 'embed_in'])
+            # save also residuals if being trained
+            #if getattr(trainer.args, "tune_residual_scaling_coef", False):
+            # keys_to_match.extend(['scaling_coef'])
+            weight_to_save = get_mm_adapter_state_maybe_zero_3(trainer.model.named_parameters(), keys_to_match)
+            trainer.model.config.save_pretrained(output_dir)
 
-        weight_to_save = get_mm_adapter_state_maybe_zero_3(trainer.model.named_parameters(), keys_to_match)
-        trainer.model.config.save_pretrained(output_dir)
+            current_folder = output_dir.split('/')[-1]
+            parent_folder = os.path.dirname(output_dir)
+            if trainer.args.local_rank == 0 or trainer.args.local_rank == -1:
+                if current_folder.startswith('checkpoint-'):
+                    mm_projector_folder = os.path.join(parent_folder, "mm_projector")
+                    os.makedirs(mm_projector_folder, exist_ok=True)
+                    torch.save(weight_to_save, os.path.join(mm_projector_folder, f'{current_folder}.bin'))
+                else:
+                    torch.save(weight_to_save, os.path.join(output_dir, f'mm_projector.bin'))
+            
+        if hasattr(trainer.model, 'dino_mm_projector') or hasattr(trainer.model.model, 'dino_mm_projector'):
+            keys_to_match = ['dino_mm_projector', 'router_dino']
+            if getattr(trainer.args, "use_im_start_end", False):
+                keys_to_match.extend(['embed_tokens', 'embed_in'])
+            if getattr(trainer.args, "tune_residual_scaling_coef", False):
+                keys_to_match.extend(['scaling_coef'])
+            # import pdb; pdb.set_trace()
+            weight_to_save = get_mm_adapter_state_maybe_zero_3(trainer.model.named_parameters(), keys_to_match)
+            trainer.model.config.save_pretrained(output_dir)
 
-        current_folder = output_dir.split('/')[-1]
-        parent_folder = os.path.dirname(output_dir)
-        if trainer.args.local_rank == 0 or trainer.args.local_rank == -1:
-            if current_folder.startswith('checkpoint-'):
-                mm_projector_folder = os.path.join(parent_folder, "mm_projector")
-                os.makedirs(mm_projector_folder, exist_ok=True)
-                torch.save(weight_to_save, os.path.join(mm_projector_folder, f'{current_folder}.bin'))
-            else:
-                torch.save(weight_to_save, os.path.join(output_dir, f'mm_projector.bin'))
+            current_folder = output_dir.split('/')[-1]
+            parent_folder = os.path.dirname(output_dir)
+            if trainer.args.local_rank == 0 or trainer.args.local_rank == -1:
+                if current_folder.startswith('checkpoint-'):
+                    mm_projector_folder = os.path.join(parent_folder, "dino_mm_projector")
+                    os.makedirs(mm_projector_folder, exist_ok=True)
+                    torch.save(weight_to_save, os.path.join(mm_projector_folder, f'{current_folder}.bin'))
+                else:
+                    torch.save(weight_to_save, os.path.join(output_dir, f'dino_mm_projector.bin'))
+
         return
 
     if trainer.deepspeed:
+        # print("=============== I AM IN DEEPSEED ===============")
         torch.cuda.synchronize()
-        trainer.save_model(output_dir)
+        # import pdb; pdb.set_trace()
+        trainer.save_model(output_dir) # breaks here
         return
-
+    # print("=============== I AM IN JUST OUTSIDE ===============")
     state_dict = trainer.model.state_dict()
     if trainer.args.should_save:
         cpu_state_dict = {
@@ -414,6 +472,7 @@ def preprocess_llama_2(
     return dict(
         input_ids=input_ids,
         labels=targets,
+        clip_texts=conversations,
     )
 
 
@@ -500,6 +559,7 @@ def preprocess_v1(
     return dict(
         input_ids=input_ids,
         labels=targets,
+        clip_texts=conversations,
     )
 
 
@@ -588,6 +648,7 @@ def preprocess_mpt(
     return dict(
         input_ids=input_ids,
         labels=targets,
+        clip_texts=conversations,
     )
 
 
@@ -610,7 +671,7 @@ def preprocess_plain(
         tokenized_len = len(tokenizer_image_token(source[0]['value'], tokenizer))
         target[:tokenized_len] = IGNORE_INDEX
 
-    return dict(input_ids=input_ids, labels=targets)
+    return dict(input_ids=input_ids, labels=targets, clip_texts=conversations)
 
 
 def preprocess(
@@ -658,15 +719,46 @@ def preprocess(
         speakers = [sentence["from"] for sentence in source]
         _mask_targets(target, tokenized_lens, speakers)
 
-    return dict(input_ids=input_ids, labels=targets)
+    return dict(input_ids=input_ids, labels=targets, clip_texts=conversations)
 
+
+class ClipDinoDualProcessor(Dataset):
+    """
+    Takes data of type LazySupervisedDataset for both clip and
+    dino and makes a single dataset containing both examples.
+    Follows LazySupervisedDataset implementation
+    """
+    def __init__(self, train_dataset_clip, train_dataset_dino):
+        super(ClipDinoDualProcessor, self).__init__()
+
+        rank0_print("\n Creating combined Clip and Dino dataset for trainer")
+        self.train_dataset_clip = train_dataset_clip
+        self.train_dataset_dino = train_dataset_dino
+
+    def __len__(self):
+        return len(self.train_dataset_clip) # number of examples should just be 
+                                            # one since you are passing the data points as pairs
+    @property
+    def modality_lengths(self):
+        return self.train_dataset_clip.modality_lengths
+
+    
+    def __getitem__(self, i) -> Dict[str, torch.Tensor]:
+        item = self.train_dataset_clip[i]
+        # assert item['input_ids'] == self.train_dataset_dino[i]['input_ids']
+        # assert item['labels'] == self.train_dataset_dino[i]['labels']
+        # assert item['clip_texts'] == self.train_dataset_dino[i]['clip_texts']
+        # if all these pass, add dino image as extra field to the item
+        item['image_dino'] = self.train_dataset_dino[i]['image']
+        return item
 
 class LazySupervisedDataset(Dataset):
     """Dataset for supervised fine-tuning."""
 
     def __init__(self, data_path: str,
                  tokenizer: transformers.PreTrainedTokenizer,
-                 data_args: DataArguments):
+                 data_args: DataArguments,
+                 for_model="clip"):
         super(LazySupervisedDataset, self).__init__()
         list_data_dict = json.load(open(data_path, "r"))
 
@@ -674,6 +766,7 @@ class LazySupervisedDataset(Dataset):
         self.tokenizer = tokenizer
         self.list_data_dict = list_data_dict
         self.data_args = data_args
+        self.for_model = for_model
 
     def __len__(self):
         return len(self.list_data_dict)
@@ -700,10 +793,16 @@ class LazySupervisedDataset(Dataset):
         if isinstance(i, int):
             sources = [sources]
         assert len(sources) == 1, "Don't know why it is wrapped to a list"  # FIXME
+
         if 'image' in sources[0]:
             image_file = self.list_data_dict[i]['image']
             image_folder = self.data_args.image_folder
-            processor = self.data_args.image_processor
+            # print("self.for_model : ", self.for_model)
+            if self.for_model == "clip" or self.for_model == "siglip":
+                processor = self.data_args.image_processor_clip # need to know when to process for dino and when to process for clip
+            else:
+                processor = self.data_args.image_processor_dino
+            # print(f"\n processor type is {type(processor)}")
             image = Image.open(os.path.join(image_folder, image_file)).convert('RGB')
             if self.data_args.image_aspect_ratio == 'pad':
                 def expand2square(pil_img, background_color):
@@ -721,6 +820,7 @@ class LazySupervisedDataset(Dataset):
                 image = expand2square(image, tuple(int(x*255) for x in processor.image_mean))
                 image = processor.preprocess(image, return_tensors='pt')['pixel_values'][0]
             else:
+                # import pdb; pdb.set_trace()
                 image = processor.preprocess(image, return_tensors='pt')['pixel_values'][0]
             sources = preprocess_multimodal(
                 copy.deepcopy([e["conversations"] for e in sources]),
@@ -732,16 +832,29 @@ class LazySupervisedDataset(Dataset):
             self.tokenizer,
             has_image=('image' in self.list_data_dict[i]))
         if isinstance(i, int):
+            # clip_text = data_dict.get("clip_texts", None)
             data_dict = dict(input_ids=data_dict["input_ids"][0],
                              labels=data_dict["labels"][0])
+            # if clip_text is not None:
+            #     data_dict["clip_texts"] = clip_text[0]
 
         # image exist in the data
         if 'image' in self.list_data_dict[i]:
             data_dict['image'] = image
         elif self.data_args.is_multimodal:
             # image does not exist in the data, but the model is multimodal
-            crop_size = self.data_args.image_processor.crop_size
-            data_dict['image'] = torch.zeros(3, crop_size['height'], crop_size['width'])
+            if self.for_model == "clip" or self.for_model == "siglip":
+                processor = self.data_args.image_processor_clip # need to know when to process for dino and when to process for clip
+                crop_size = processor.crop_size
+                data_dict['image'] = torch.zeros(3, crop_size['height'], crop_size['width'])
+            else:
+                processor = self.data_args.image_processor_dino
+                crop_size = processor.crop_size
+                data_dict['image'] = torch.zeros(3, crop_size, crop_size)
+            # print("\n calculating crop size")
+            # crop_size = processor.crop_size
+            # # print("\n END calculating crop size")
+            # data_dict['image'] = torch.zeros(3, crop_size['height'], crop_size['width'])
         return data_dict
 
 
@@ -769,23 +882,51 @@ class DataCollatorForSupervisedDataset(object):
             attention_mask=input_ids.ne(self.tokenizer.pad_token_id),
         )
 
+        # if 'clip_texts' in instances[0]:
+        #     batch['clip_texts'] = [instance['clip_texts'] for instance in instances]
         if 'image' in instances[0]:
             images = [instance['image'] for instance in instances]
+            # not a concern if dino_images is empty here but encoder_type has dino in it because we will replace dino_images
+            # with images in comput_loss in llava_trainer
+            dino_images = [instance['image_dino'] for instance in instances if 'image_dino' in instance]
+            # print("\n dino_images : ", dino_images)
+            # import sys; sys.exit(0)
             if all(x is not None and x.shape == images[0].shape for x in images):
                 batch['images'] = torch.stack(images)
+                batch['dino_images'] = torch.stack(dino_images) if dino_images else None
             else:
                 batch['images'] = images
+                batch['dino_images'] = dino_images if dino_images else None
 
         return batch
 
 
 def make_supervised_data_module(tokenizer: transformers.PreTrainedTokenizer,
-                                data_args) -> Dict:
+                                data_args, encoder_type) -> Dict:
     """Make dataset and collator for supervised fine-tuning."""
-    train_dataset = LazySupervisedDataset(tokenizer=tokenizer,
-                                data_path=data_args.data_path,
-                                data_args=data_args)
+    # import pdb; pdb.set_trace()
+    train_dataset = None
+    if "clip" in encoder_type or "siglip" in encoder_type:
+        train_dataset = LazySupervisedDataset(tokenizer=tokenizer,
+                                    data_path=data_args.data_path,
+                                    data_args=data_args)
+    train_dataset_dino = None
+    if "dino" in encoder_type:
+        train_dataset_dino = LazySupervisedDataset(tokenizer=tokenizer,
+                                    data_path=data_args.data_path,
+                                    data_args=data_args,
+                                    for_model="dino")
+    
+    if train_dataset_dino is not None and train_dataset is not None:
+        print("\n we are using combined dataset processor since we are using clip + dino instance. If this was not intended, please change the encoder_type parameter.")
+        train_dataset = ClipDinoDualProcessor(train_dataset, train_dataset_dino)
+    elif train_dataset_dino is not None:
+        train_dataset = train_dataset_dino
+
     data_collator = DataCollatorForSupervisedDataset(tokenizer=tokenizer)
+    
+    # we shoul not have a train_dataset and then a seperate train_dataset_dino because that
+    # will mess up downstream since we use Trainer. 
     return dict(train_dataset=train_dataset,
                 eval_dataset=None,
                 data_collator=data_collator)
@@ -793,7 +934,7 @@ def make_supervised_data_module(tokenizer: transformers.PreTrainedTokenizer,
 
 def train(attn_implementation=None):
     global local_rank
-
+    rank0_print("====================== SUCCESSFULLY IN NO ROUTER TRAINER ======================")
     parser = transformers.HfArgumentParser(
         (ModelArguments, DataArguments, TrainingArguments))
     model_args, data_args, training_args = parser.parse_args_into_dataclasses()
@@ -810,7 +951,7 @@ def train(attn_implementation=None):
             quantization_config=BitsAndBytesConfig(
                 load_in_4bit=training_args.bits == 4,
                 load_in_8bit=training_args.bits == 8,
-                llm_int8_skip_modules=["mm_projector"],
+                llm_int8_skip_modules=["mm_projector", "dino_mm_projector"],
                 llm_int8_threshold=6.0,
                 llm_int8_has_fp16_weight=False,
                 bnb_4bit_compute_dtype=compute_dtype,
@@ -818,10 +959,15 @@ def train(attn_implementation=None):
                 bnb_4bit_quant_type=training_args.quant_type # {'fp4', 'nf4'}
             )
         ))
-
+    # import pdb; pdb.set_trace()
     if model_args.vision_tower is not None:
+        config = transformers.AutoConfig.from_pretrained(model_args.model_name_or_path, trust_remote_code=True)
+        config.mm_hidden_size_dino = 1024
+        config.fusion_type = model_args.fusion_type # this only matters if we have clip + dino instance
+        config.encoder_type = model_args.encoder_type
+        
         if 'mpt' in model_args.model_name_or_path:
-            config = transformers.AutoConfig.from_pretrained(model_args.model_name_or_path, trust_remote_code=True)
+            # config = transformers.AutoConfig.from_pretrained(model_args.model_name_or_path, trust_remote_code=True)
             config.attn_config['attn_impl'] = training_args.mpt_attn_impl
             model = LlavaMptForCausalLM.from_pretrained(
                 model_args.model_name_or_path,
@@ -832,6 +978,7 @@ def train(attn_implementation=None):
         else:
             model = LlavaLlamaForCausalLM.from_pretrained(
                 model_args.model_name_or_path,
+                config=config,
                 cache_dir=training_args.cache_dir,
                 attn_implementation=attn_implementation,
                 torch_dtype=(torch.bfloat16 if training_args.bf16 else None),
@@ -841,11 +988,13 @@ def train(attn_implementation=None):
         model = transformers.LlamaForCausalLM.from_pretrained(
             model_args.model_name_or_path,
             cache_dir=training_args.cache_dir,
+            config=config,
             attn_implementation=attn_implementation,
             torch_dtype=(torch.bfloat16 if training_args.bf16 else None),
             **bnb_model_from_pretrained_args
         )
     model.config.use_cache = False
+    model.config.encoder_type = model_args.encoder_type
 
     if model_args.freeze_backbone:
         model.model.requires_grad_(False)
@@ -920,27 +1069,29 @@ def train(attn_implementation=None):
             model_args=model_args,
             fsdp=training_args.fsdp
         )
+        # import pdb; pdb.set_trace()
+        # vision_tower = model.get_vision_tower()
         
-        vision_tower = model.get_vision_tower()
-        vision_tower.to(dtype=torch.bfloat16 if training_args.bf16 else torch.float16, device=training_args.device)
-        # print("vision tower: ", vision_tower)
-        # vision_tower.vision_tower.vision_model.encoder.gradient_checkpointing = False
-        # if hasattr(vision_tower, "gradient_checkpointing_disable"):
-        #     vision_tower.gradient_checkpointing_disable()
-
-        # # Also slam the common flags (harmless if already False)
-        # if hasattr(vision_tower, "vision_model") and hasattr(vision_tower.vision_model, "encoder"):
-        #     vision_tower.vision_tower.vision_model.encoder.gradient_checkpointing = False
-        # if hasattr(vision_tower, "vision_model"):
-        #     vision_tower.vision_tower.vision_model.gradient_checkpointing = False
-        # if hasattr(vision_tower, "gradient_checkpointing"):
-        #     vision_tower.vision_tower.gradient_checkpointing = False
-
-        # print("VT ckpt flags:",
-        #     getattr(vision_tower, "gradient_checkpointing", None),
-        #     getattr(vision_tower.vision_tower.vision_model, "gradient_checkpointing", None),
-        #     getattr(vision_tower.vision_tower.vision_model.encoder, "gradient_checkpointing", None))
-        data_args.image_processor = vision_tower.image_processor
+        vision_tower = None
+        dino_tower = None
+        if ("clip" in model_args.encoder_type or "siglip" in model_args.encoder_type):
+            vision_tower = model.get_vision_tower()
+            vision_tower.to(dtype=torch.bfloat16 if training_args.bf16 else torch.float16, device=training_args.device)
+        if "dino" in model_args.encoder_type:
+            dino_tower = model.get_dino_vision_tower() # create seperate dino_tower when we have clip + dino instance
+            dino_tower.to(dtype=torch.bfloat16 if training_args.bf16 else torch.float16, device=training_args.device)
+        
+        data_args.image_processor_clip = None
+        data_args.image_processor_dino = None
+        if vision_tower is not None:
+            data_args.image_processor_clip = vision_tower.image_processor
+        if dino_tower is not None:
+            data_args.image_processor_dino = dino_tower.image_processor
+        
+        if ("clip" in model_args.encoder_type or "siglip" in model_args.encoder_type):
+            assert data_args.image_processor_clip is not None
+        if "dino" in model_args.encoder_type:
+            assert data_args.image_processor_dino is not None
         data_args.is_multimodal = True
 
         model.config.image_aspect_ratio = data_args.image_aspect_ratio
@@ -949,45 +1100,92 @@ def train(attn_implementation=None):
 
         model.config.tune_mm_mlp_adapter = training_args.tune_mm_mlp_adapter = model_args.tune_mm_mlp_adapter
         model.config.tune_residual_scaling_coef = training_args.tune_residual_scaling_coef = model_args.tune_residual_scaling_coef
+        
+        if model_args.tune_encoder_layers:
+            if vision_tower is not None:
+                layers = vision_tower.vision_tower.vision_model.encoder.layers
+                for n,p in layers.named_parameters():
+                    if 'scaling_coef' not in n:
+                        p.requires_grad_(True)
+            if dino_tower is not None:
+                layers = dino_tower.vision_tower.backbone.model.blocks
+                for n,p in layers.named_parameters():
+                    if 'scaling_coef' not in n:
+                        p.requires_grad_(True)
+
         if model_args.tune_mm_mlp_adapter:
             model.requires_grad_(False)
-            for p in model.get_model().mm_projector.parameters():
-                p.requires_grad = True
+            # for p in model.get_model().mm_projector.parameters():
+            #     p.requires_grad = True
+            if hasattr(model.get_model(), "mm_projector"):
+                for p in model.get_model().mm_projector.parameters():
+                    p.requires_grad = True
+        
+            if hasattr(model.get_model(), "dino_mm_projector"):
+                for p in model.get_model().dino_mm_projector.parameters():
+                        p.requires_grad = True
 
         if model_args.tune_residual_scaling_coef:
-            for n, p in vision_tower.named_parameters():
-                if "scaling_coef" in n:
-                    p.requires_grad = True
+            if vision_tower is not None:
+                for n, p in vision_tower.named_parameters():
+                    if "scaling_coef" in n:
+                        p.requires_grad = True
+            if dino_tower is not None:
+                for n, p in dino_tower.named_parameters():
+                    if "scaling_coef" in n:
+                        p.requires_grad = True
 
         model.config.freeze_mm_mlp_adapter = training_args.freeze_mm_mlp_adapter
         model.config.freeze_residual_scaling_coef = training_args.freeze_residual_scaling_coef
         # import pdb; pdb.set_trace()
         if training_args.freeze_mm_mlp_adapter:
-            for p in model.get_model().mm_projector.parameters():
-                p.requires_grad = False
-        if training_args.freeze_residual_scaling_coef:
-            for n, p in vision_tower.named_parameters():
-                if "scaling_coef" in n:
+            if hasattr(model.get_model(), "mm_projector"):
+                for p in model.get_model().mm_projector.parameters():
+                    p.requires_grad = False
+            if hasattr(model.get_model(), "dino_mm_projector"):
+                for p in model.get_model().dino_mm_projector.parameters():
                     p.requires_grad = False
 
+        if training_args.freeze_residual_scaling_coef:
+            if vision_tower is not None:
+                for n, p in vision_tower.named_parameters():
+                    if "scaling_coef" in n:
+                        p.requires_grad = False
+            if dino_tower is not None:
+                for n, p in dino_tower.named_parameters():
+                    if "scaling_coef" in n:
+                        p.requires_grad = False
+
         if training_args.bits in [4, 8]:
-            model.get_model().mm_projector.to(dtype=compute_dtype, device=training_args.device)
+            if hasattr(model.get_model(), "mm_projector"):
+                model.get_model().mm_projector.to(dtype=compute_dtype, device=training_args.device)
+            if hasattr(model.get_model(), "dino_mm_projector"):
+                model.get_model().dino_mm_projector.to(dtype=compute_dtype, device=training_args.device)
 
         model.config.mm_use_im_start_end = data_args.mm_use_im_start_end = model_args.mm_use_im_start_end
         model.config.mm_projector_lr = training_args.mm_projector_lr
+        model.config.dino_mm_projector_lr = training_args.dino_mm_projector_lr
         training_args.use_im_start_end = model_args.mm_use_im_start_end
         model.config.mm_use_im_patch_token = model_args.mm_use_im_patch_token
         model.initialize_vision_tokenizer(model_args, tokenizer=tokenizer)
 
-        if training_args.gradient_checkpointing: # this was needed because the vision model did not have inputs require True, resulting in no gradients being passed through the model
+        if (model_args.tune_residual_scaling_coef or model_args.tune_encoder_layers) and training_args.gradient_checkpointing: # this was needed because the vision model did not have inputs require True, resulting in no gradients being passed through the model
             # pdb.set_trace()
-            if hasattr(vision_tower, "enable_input_require_grads"):
-                vision_tower.enable_input_require_grads()
-            else:
-                def make_inputs_require_grad(module, input, output):
-                    output.requires_grad_(True)
-                vision_tower.vision_tower.vision_model.embeddings.register_forward_hook(make_inputs_require_grad)
-
+            if vision_tower is not None:
+                if hasattr(vision_tower, "enable_input_require_grads"):
+                    vision_tower.enable_input_require_grads()
+                else:
+                    def make_inputs_require_grad(module, input, output):
+                        output.requires_grad_(True)
+                    vision_tower.vision_tower.vision_model.embeddings.register_forward_hook(make_inputs_require_grad)
+            
+            if dino_tower is not None:
+                if hasattr(dino_tower, "enable_input_require_grads"):
+                    dino_tower.enable_input_require_grads()
+                else:
+                    def make_inputs_require_grad(module, input, output):
+                        output.requires_grad_(True)
+                    dino_tower.vision_tower.backbone.model.patch_embed.register_forward_hook(make_inputs_require_grad)
         
 
     if training_args.bits in [4, 8]:
@@ -1002,17 +1200,29 @@ def train(attn_implementation=None):
                 if hasattr(module, 'weight'):
                     if training_args.bf16 and module.weight.dtype == torch.float32:
                         module = module.to(torch.bfloat16)
-
+    # import pdb; pdb.set_trace()
     data_module = make_supervised_data_module(tokenizer=tokenizer,
-                                              data_args=data_args)
+                                              data_args=data_args, 
+                                              encoder_type=model_args.encoder_type)
     trainer = LLaVATrainer(model=model,
                     tokenizer=tokenizer,
                     args=training_args,
+                    encoder_type=model_args.encoder_type,
+                    fusion_type_when_preparing_inputs=model_args.fusion_type,
                     **data_module)
     
     # print("TRAINABLE SCALARS:",
     #   [n for n,p in model.named_parameters() if "scaling_coef" in n and p.requires_grad])
     # import sys; sys.exit(0)
+
+    trainable_params =  [n for n,p in model.named_parameters() if p.requires_grad]
+    for n in trainable_params:
+        assert 'scaling_coef' not in n
+        assert 'vision_tower' not in n
+    print("TRAINABLE parameters:",
+      [n for n,p in model.named_parameters() if p.requires_grad])
+
+
     if list(pathlib.Path(training_args.output_dir).glob("checkpoint-*")):
         trainer.train(resume_from_checkpoint=True)
     else:

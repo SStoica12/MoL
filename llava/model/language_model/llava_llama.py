@@ -26,6 +26,12 @@ from transformers.generation.utils import GenerateOutput
 
 from ..llava_arch import LlavaMetaModel, LlavaMetaForCausalLM
 
+def rank0_print(*args):
+    import os
+    local_rank = int(os.environ.get("LOCAL_RANK", 0))
+    if local_rank == 0:
+        print(*args)
+
 class LlavaConfig(LlamaConfig):
     model_type = "llava_llama"
     encoder_type: str = "clip" # or dino or clip_dino or c4
@@ -250,13 +256,13 @@ class DoubleRouterLlavaLlamaForCausalLM(LlavaLlamaForCausalLM): # for both dino 
     def encode_images_withclip(self, images, text_embeds=None, text_attention_mask=None, encoder_type="clip"):
         self.rank0_print(f" \n ================== I AM IN ROUTER ENCODE IMAGES WITH CLIP using encoder {encoder_type}! ==================")
         # import pdb; pdb.set_trace()
-        vision_tower = self.get_model().get_vision_tower(load_model=type).vision_tower
+        vision_tower = self.get_model().get_vision_tower(load_model=encoder_type).vision_tower
         device = vision_tower.device
         dtype = vision_tower.dtype
         self.text_embeds_clip = text_embeds
         self.text_attention_mask_clip = text_attention_mask
         
-        if encoder_type(images) is list:
+        if type(images) is list:
             image_features = []
             for image in images:
                 image_features.append(vision_tower(image.to(device=device, dtype=dtype).unsqueeze(0), output_hidden_states=True).hidden_states)
@@ -433,9 +439,13 @@ class RouterLlavaLlamaForCausalLM(LlavaLlamaForCausalLM):
             cached_router_probs_dino = getattr(self.router_dino, "_latest_router_probs_for_aux_dino", None)
         
         if cached_router_probs_clip is not None:
-            return self.router_clip.load_balance_loss(cached_router_probs_clip)
+            loss = self.router_clip.load_balance_loss(cached_router_probs_clip)
+            rank0_print(f"Using cached router probs for clip, load balance loss: {loss.item()}")
+            return loss
         if cached_router_probs_dino is not None:
-            return self.router_dino.load_balance_loss(cached_router_probs_dino)
+            loss = self.router_dino.load_balance_loss(cached_router_probs_dino)
+            rank0_print(f"Using cached router probs for dino, load balance loss: {loss.item()}")
+            return loss
         
         if "clip" in self.encoder_type or "siglip" in self.encoder_type:
             if "clip" in self.encoder_type:

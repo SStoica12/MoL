@@ -1,0 +1,1231 @@
+[2026-04-04 20:24:07,926] [INFO] [real_accelerator.py:203:get_accelerator] Setting ds_accelerator to cuda (auto detect)
+Warning: The default cache directory for DeepSpeed Triton autotune, /home/sstoica2/.triton/autotune, appears to be on an NFS system. While this is generally acceptable, if you experience slowdowns or hanging when DeepSpeed exits, it is recommended to set the TRITON_CACHE_DIR environment variable to a non-NFS path.
+[93m [WARNING] [0m async_io requires the dev libaio .so object and headers but these were not found.
+[93m [WARNING] [0m async_io: please install the libaio-dev package with apt
+[93m [WARNING] [0m If libaio is already installed (perhaps from source), try setting the CFLAGS and LDFLAGS environment variables to where it can be found.
+[93m [WARNING] [0m Please specify the CUTLASS repo directory as environment variable $CUTLASS_PATH
+[93m [WARNING] [0m sparse_attn requires a torch version >= 1.5 and < 2.0 but detected 2.1
+[93m [WARNING] [0m using untested triton version (2.1.0), only 1.0.0 is known to be compatible
+[2026-04-04 20:24:10,971] [WARNING] [runner.py:202:fetch_hostfile] Unable to find hostfile, will proceed with training with local resources only.
+[2026-04-04 20:24:10,971] [INFO] [runner.py:568:main] cmd = /shared/nas/data/m1/sstoica2/conda/envs/j_llava_inc_transformers/bin/python -u -m deepspeed.launcher.launch --world_info=eyJsb2NhbGhvc3QiOiBbMl19 --master_addr=127.0.0.1 --master_port=29500 --enable_each_rank_log=None /shared/nas2/sstoica2/MoL/llava/train/train_mem_router.py --deepspeed /shared/nas2/sstoica2/MoL/scripts/zero2.json --model_name_or_path lmsys/vicuna-13b-v1.5 --version plain --data_path /shared/nas/data/m1/sstoica2/.cache/huggingface/.cache/huggingface/datasets--Blip/blip_laion_cc_sbu_558k.json --image_folder /shared/nas/data/m1/sstoica2/.cache/huggingface/.cache/huggingface/datasets--Blip/images --vision_tower google/siglip-so400m-patch14-384 --mm_projector_type mlp2x_gelu --tune_mm_mlp_adapter True --tune_residual_scaling_coef False --freeze_backbone True --mm_vision_select_layer -2 --num_layers_to_choose 1 --mm_use_im_start_end False --mm_use_im_patch_token False --mm_use_text_enc True --use_text_conditioned_router True --text_conditioning attention --text_attention_type qk --text_attention_dim 1024 --attn_level patch_layer --use_text_only_gating False --text_pool mean --text_scale 1.0 --bf16 True --output_dir /shared/nas2/sstoica2/MoL/checkpoints/llava-v1.5-13b-moe-pretrain_2e-4_text-cond-attn-token-router_pretrain_siglip_update_code --num_train_epochs 1 --per_device_train_batch_size 32 --per_device_eval_batch_size 4 --gradient_accumulation_steps 2 --evaluation_strategy no --save_strategy steps --save_steps 456 --save_total_limit 100 --mm_projector_lr 1e-3 --router_lr 1e-5 --weight_decay 0. --warmup_ratio 0.03 --lr_scheduler_type cosine --logging_steps 1 --tf32 True --model_max_length 2048 --gradient_checkpointing True --dataloader_num_workers 4 --lazy_preprocess True --force_reserve_layer True --reserve_layer -2 --learnable_gate True --confidence_gate False --confidence_gate_threshold 0.6 --confidence_gate_slope 10.0 --save_router_stats True --save_steps_router_stats 5 --report_to wandb --encoder_type siglip
+[2026-04-04 20:24:13,802] [INFO] [real_accelerator.py:203:get_accelerator] Setting ds_accelerator to cuda (auto detect)
+Warning: The default cache directory for DeepSpeed Triton autotune, /home/sstoica2/.triton/autotune, appears to be on an NFS system. While this is generally acceptable, if you experience slowdowns or hanging when DeepSpeed exits, it is recommended to set the TRITON_CACHE_DIR environment variable to a non-NFS path.
+[93m [WARNING] [0m async_io requires the dev libaio .so object and headers but these were not found.
+[93m [WARNING] [0m async_io: please install the libaio-dev package with apt
+[93m [WARNING] [0m If libaio is already installed (perhaps from source), try setting the CFLAGS and LDFLAGS environment variables to where it can be found.
+[93m [WARNING] [0m Please specify the CUTLASS repo directory as environment variable $CUTLASS_PATH
+[93m [WARNING] [0m sparse_attn requires a torch version >= 1.5 and < 2.0 but detected 2.1
+[93m [WARNING] [0m using untested triton version (2.1.0), only 1.0.0 is known to be compatible
+[2026-04-04 20:24:16,312] [INFO] [launch.py:146:main] WORLD INFO DICT: {'localhost': [2]}
+[2026-04-04 20:24:16,312] [INFO] [launch.py:152:main] nnodes=1, num_local_procs=1, node_rank=0
+[2026-04-04 20:24:16,312] [INFO] [launch.py:163:main] global_rank_mapping=defaultdict(<class 'list'>, {'localhost': [0]})
+[2026-04-04 20:24:16,312] [INFO] [launch.py:164:main] dist_world_size=1
+[2026-04-04 20:24:16,312] [INFO] [launch.py:168:main] Setting CUDA_VISIBLE_DEVICES=2
+[2026-04-04 20:24:16,314] [INFO] [launch.py:256:main] process 1091992 spawned with command: ['/shared/nas/data/m1/sstoica2/conda/envs/j_llava_inc_transformers/bin/python', '-u', '/shared/nas2/sstoica2/MoL/llava/train/train_mem_router.py', '--local_rank=0', '--deepspeed', '/shared/nas2/sstoica2/MoL/scripts/zero2.json', '--model_name_or_path', 'lmsys/vicuna-13b-v1.5', '--version', 'plain', '--data_path', '/shared/nas/data/m1/sstoica2/.cache/huggingface/.cache/huggingface/datasets--Blip/blip_laion_cc_sbu_558k.json', '--image_folder', '/shared/nas/data/m1/sstoica2/.cache/huggingface/.cache/huggingface/datasets--Blip/images', '--vision_tower', 'google/siglip-so400m-patch14-384', '--mm_projector_type', 'mlp2x_gelu', '--tune_mm_mlp_adapter', 'True', '--tune_residual_scaling_coef', 'False', '--freeze_backbone', 'True', '--mm_vision_select_layer', '-2', '--num_layers_to_choose', '1', '--mm_use_im_start_end', 'False', '--mm_use_im_patch_token', 'False', '--mm_use_text_enc', 'True', '--use_text_conditioned_router', 'True', '--text_conditioning', 'attention', '--text_attention_type', 'qk', '--text_attention_dim', '1024', '--attn_level', 'patch_layer', '--use_text_only_gating', 'False', '--text_pool', 'mean', '--text_scale', '1.0', '--bf16', 'True', '--output_dir', '/shared/nas2/sstoica2/MoL/checkpoints/llava-v1.5-13b-moe-pretrain_2e-4_text-cond-attn-token-router_pretrain_siglip_update_code', '--num_train_epochs', '1', '--per_device_train_batch_size', '32', '--per_device_eval_batch_size', '4', '--gradient_accumulation_steps', '2', '--evaluation_strategy', 'no', '--save_strategy', 'steps', '--save_steps', '456', '--save_total_limit', '100', '--mm_projector_lr', '1e-3', '--router_lr', '1e-5', '--weight_decay', '0.', '--warmup_ratio', '0.03', '--lr_scheduler_type', 'cosine', '--logging_steps', '1', '--tf32', 'True', '--model_max_length', '2048', '--gradient_checkpointing', 'True', '--dataloader_num_workers', '4', '--lazy_preprocess', 'True', '--force_reserve_layer', 'True', '--reserve_layer', '-2', '--learnable_gate', 'True', '--confidence_gate', 'False', '--confidence_gate_threshold', '0.6', '--confidence_gate_slope', '10.0', '--save_router_stats', 'True', '--save_steps_router_stats', '5', '--report_to', 'wandb', '--encoder_type', 'siglip']
+====================== SUCCESSFULLY IN MOL TRAINER ROUTER ======================
+[2026-04-04 20:24:22,735] [INFO] [real_accelerator.py:203:get_accelerator] Setting ds_accelerator to cuda (auto detect)
+Warning: The default cache directory for DeepSpeed Triton autotune, /home/sstoica2/.triton/autotune, appears to be on an NFS system. While this is generally acceptable, if you experience slowdowns or hanging when DeepSpeed exits, it is recommended to set the TRITON_CACHE_DIR environment variable to a non-NFS path.
+[93m [WARNING] [0m async_io requires the dev libaio .so object and headers but these were not found.
+[93m [WARNING] [0m async_io: please install the libaio-dev package with apt
+[93m [WARNING] [0m If libaio is already installed (perhaps from source), try setting the CFLAGS and LDFLAGS environment variables to where it can be found.
+[93m [WARNING] [0m Please specify the CUTLASS repo directory as environment variable $CUTLASS_PATH
+[93m [WARNING] [0m sparse_attn requires a torch version >= 1.5 and < 2.0 but detected 2.1
+[93m [WARNING] [0m using untested triton version (2.1.0), only 1.0.0 is known to be compatible
+[2026-04-04 20:24:23,612] [INFO] [comm.py:637:init_distributed] cdb=None
+[2026-04-04 20:24:23,612] [INFO] [comm.py:668:init_distributed] Initializing TorchBackend in DeepSpeed with backend nccl
+vision_tower_cfg.use_text_enc True
+Vision tower clip encoder type:  google/siglip-so400m-patch14-384
+Loading Dino Tower with dino encoder type:  siglip
+use_text_enc :  True
+
+ Loaded SiglipVisionTextTower
+use_text_enc:  True
+Formatting inputs...Skip in lazy mode
+TRAINABLE parameters: ['model.mm_projector.0.weight', 'model.mm_projector.0.bias', 'model.mm_projector.2.weight', 'model.mm_projector.2.bias', 'router_clip._weight_fn.weights', 'router_clip.reserve_gate.weight', 'router_clip.reserve_gate.bias', 'router_clip.text_attn_q.weight', 'router_clip.text_attn_q.bias', 'router_clip.text_attn_k.weight', 'router_clip.text_attn_k.bias']
+TRAINABLE OPTIMIZER
+
+=== group 3: lr=1.000e-03 wd=0.0 ===
+  model.mm_projector.0.weight
+  model.mm_projector.2.weight
+
+=== group 5: lr=1.000e-03 wd=0.0 ===
+  model.mm_projector.0.bias
+  model.mm_projector.2.bias
+
+=== group 7: lr=1.000e-05 wd=0.0 ===
+  router_clip._weight_fn.weights
+  router_clip.reserve_gate.weight
+  router_clip.reserve_gate.bias
+  router_clip.text_attn_q.weight
+  router_clip.text_attn_q.bias
+  router_clip.text_attn_k.weight
+  router_clip.text_attn_k.bias
+
+ Using text conditioned routing...
+ 
+ ================== I AM IN ROUTER ENCODE IMAGES WITH CLIP  using encoder siglip! ==================
+
+ calculating forward using patch_layer branch...
+
+ ====== q.min() tensor(-1.6953, device='cuda:0', dtype=torch.bfloat16, grad_fn=<MinBackward1>) q.max() tensor(1.7578, device='cuda:0', dtype=torch.bfloat16, grad_fn=<MaxBackward1>)
+
+ ====== k.min() tensor(-31., device='cuda:0', dtype=torch.bfloat16, grad_fn=<MinBackward1>) k.max() tensor(27.1250, device='cuda:0', dtype=torch.bfloat16, grad_fn=<MaxBackward1>)
+
+ ====== scores.min() tensor(-2.3594, device='cuda:0', dtype=torch.bfloat16, grad_fn=<MinBackward1>) scores.max() tensor(5.6250, device='cuda:0', dtype=torch.bfloat16, grad_fn=<MaxBackward1>)
+
+ ====== scores AFTER noise min() tensor(-2.2086, device='cuda:0', grad_fn=<MinBackward1>) scores.max() tensor(6.4609, device='cuda:0', grad_fn=<MaxBackward1>)
+
+ ====== gate_logits.min() tensor(-4.5312, device='cuda:0', dtype=torch.bfloat16, grad_fn=<MinBackward1>) gate_logits.max() tensor(4.6562, device='cuda:0', dtype=torch.bfloat16, grad_fn=<MaxBackward1>)
+
+ ====== router_probs.min() tensor(9.0153e-05, device='cuda:0', grad_fn=<MinBackward1>) router_probs.max() tensor(0.9922, device='cuda:0', grad_fn=<MaxBackward1>)
+
+ ======= router_probs_for_selection.min() tensor(-1., device='cuda:0', grad_fn=<MinBackward1>) router_probs_for_selection.max() tensor(0.8149, device='cuda:0', grad_fn=<MaxBackward1>)
+
+ ======= reserve_layer_prob.min() tensor(0.0107, device='cuda:0', grad_fn=<MinBackward1>) reserve_layer_prob.max() tensor(0.9922, device='cuda:0', grad_fn=<MaxBackward1>)
+
+ ================================================
+
+ k: 1
+
+ router_probs_for_selection min  tensor(-1., device='cuda:0', grad_fn=<MinBackward1>) max tensor(0.8149, device='cuda:0', grad_fn=<MaxBackward1>)
+
+ getting patch_layer_and_scaling_probs with forced reserve layer...
+
+ remaining_mass min  tensor(0.0078, device='cuda:0', grad_fn=<MinBackward1>) max tensor(0.9893, device='cuda:0', grad_fn=<MaxBackward1>)
+
+ probs_sum min  tensor(0.0005, device='cuda:0', grad_fn=<MinBackward1>) max tensor(0.8149, device='cuda:0', grad_fn=<MaxBackward1>)
+
+ scale min  tensor(1.1030, device='cuda:0', grad_fn=<MinBackward1>) max  tensor(20.1196, device='cuda:0', grad_fn=<MaxBackward1>)
+
+ =================================================
+
+ ================ main loss: 7.8562
+
+ calculating aux_loss
+
+ calculating patch layer load balancing loss...
+aux_payload :  {'kind': 'patch_layer', 'router_probs': tensor([[[0.0045, 0.0024, 0.0039,  ..., 0.0055, 0.8828, 0.0116],
+         [0.0206, 0.0296, 0.0193,  ..., 0.0402, 0.2559, 0.1360],
+         [0.0167, 0.0152, 0.0283,  ..., 0.0358, 0.2236, 0.1537],
+         ...,
+         [0.0102, 0.0189, 0.0115,  ..., 0.0158, 0.5352, 0.0455],
+         [0.0065, 0.0112, 0.0055,  ..., 0.0107, 0.7344, 0.0146],
+         [0.0323, 0.0358, 0.0154,  ..., 0.0191, 0.2793, 0.0410]],
+
+        [[0.0273, 0.0387, 0.0179,  ..., 0.0330, 0.2109, 0.0287],
+         [0.0170, 0.0187, 0.0310,  ..., 0.0237, 0.2578, 0.0410],
+         [0.0096, 0.0042, 0.0047,  ..., 0.0109, 0.1406, 0.6706],
+         ...,
+         [0.0424, 0.0248, 0.0349,  ..., 0.0365, 0.1748, 0.0928],
+         [0.0354, 0.0284, 0.0163,  ..., 0.0286, 0.4199, 0.0412],
+         [0.0433, 0.0322, 0.0228,  ..., 0.0171, 0.2021, 0.0596]],
+
+        [[0.0195, 0.0122, 0.0092,  ..., 0.0089, 0.6641, 0.0308],
+         [0.0094, 0.0132, 0.0084,  ..., 0.0081, 0.6836, 0.0267],
+         [0.0043, 0.0059, 0.0043,  ..., 0.0109, 0.7930, 0.0172],
+         ...,
+         [0.0032, 0.0032, 0.0045,  ..., 0.0087, 0.8516, 0.0095],
+         [0.0016, 0.0017, 0.0040,  ..., 0.0028, 0.9141, 0.0076],
+         [0.0085, 0.0060, 0.0070,  ..., 0.0094, 0.7070, 0.0273]],
+
+        ...,
+
+        [[0.0205, 0.0104, 0.0101,  ..., 0.0178, 0.6289, 0.0217],
+         [0.0087, 0.0092, 0.0094,  ..., 0.0193, 0.2451, 0.4718],
+         [0.0074, 0.0051, 0.0100,  ..., 0.0122, 0.2930, 0.4588],
+         ...,
+         [0.0319, 0.0256, 0.0163,  ..., 0.0344, 0.3906, 0.0253],
+         [0.0131, 0.0098, 0.0057,  ..., 0.0127, 0.7344, 0.0254],
+         [0.0047, 0.0089, 0.0075,  ..., 0.0110, 0.7812, 0.0247]],
+
+        [[0.0243, 0.0247, 0.0178,  ..., 0.0235, 0.4746, 0.0468],
+         [0.0343, 0.0322, 0.0164,  ..., 0.0215, 0.2617, 0.1176],
+         [0.0323, 0.0141, 0.0131,  ..., 0.0221, 0.2812, 0.1010],
+         ...,
+         [0.0088, 0.0142, 0.0091,  ..., 0.0069, 0.7070, 0.0325],
+         [0.0181, 0.0106, 0.0233,  ..., 0.0237, 0.4648, 0.0489],
+         [0.0231, 0.0096, 0.0129,  ..., 0.0130, 0.4668, 0.0540]],
+
+        [[0.0308, 0.0307, 0.0231,  ..., 0.0212, 0.1729, 0.0869],
+         [0.0325, 0.0219, 0.0333,  ..., 0.0470, 0.0757, 0.0798],
+         [0.0176, 0.0314, 0.0220,  ..., 0.0544, 0.0913, 0.1320],
+         ...,
+         [0.0153, 0.0161, 0.0213,  ..., 0.0148, 0.4297, 0.0167],
+         [0.0218, 0.0218, 0.0390,  ..., 0.0231, 0.2305, 0.0317],
+         [0.0120, 0.0348, 0.0232,  ..., 0.0505, 0.1943, 0.0465]]],
+       device='cuda:0', grad_fn=<CopySlices>), 'router_probs_for_selection': tensor([[[ 0.0045,  0.0024,  0.0039,  ...,  0.0055, -1.0000,  0.0116],
+         [ 0.0206,  0.0296,  0.0193,  ...,  0.0402, -1.0000,  0.1360],
+         [ 0.0167,  0.0152,  0.0283,  ...,  0.0358, -1.0000,  0.1537],
+         ...,
+         [ 0.0102,  0.0189,  0.0115,  ...,  0.0158, -1.0000,  0.0455],
+         [ 0.0065,  0.0112,  0.0055,  ...,  0.0107, -1.0000,  0.0146],
+         [ 0.0323,  0.0358,  0.0154,  ...,  0.0191, -1.0000,  0.0410]],
+
+        [[ 0.0273,  0.0387,  0.0179,  ...,  0.0330, -1.0000,  0.0287],
+         [ 0.0170,  0.0187,  0.0310,  ...,  0.0237, -1.0000,  0.0410],
+         [ 0.0096,  0.0042,  0.0047,  ...,  0.0109, -1.0000,  0.6706],
+         ...,
+         [ 0.0424,  0.0248,  0.0349,  ...,  0.0365, -1.0000,  0.0928],
+         [ 0.0354,  0.0284,  0.0163,  ...,  0.0286, -1.0000,  0.0412],
+         [ 0.0433,  0.0322,  0.0228,  ...,  0.0171, -1.0000,  0.0596]],
+
+        [[ 0.0195,  0.0122,  0.0092,  ...,  0.0089, -1.0000,  0.0308],
+         [ 0.0094,  0.0132,  0.0084,  ...,  0.0081, -1.0000,  0.0267],
+         [ 0.0043,  0.0059,  0.0043,  ...,  0.0109, -1.0000,  0.0172],
+         ...,
+         [ 0.0032,  0.0032,  0.0045,  ...,  0.0087, -1.0000,  0.0095],
+         [ 0.0016,  0.0017,  0.0040,  ...,  0.0028, -1.0000,  0.0076],
+         [ 0.0085,  0.0060,  0.0070,  ...,  0.0094, -1.0000,  0.0273]],
+
+        ...,
+
+        [[ 0.0205,  0.0104,  0.0101,  ...,  0.0178, -1.0000,  0.0217],
+         [ 0.0087,  0.0092,  0.0094,  ...,  0.0193, -1.0000,  0.4718],
+         [ 0.0074,  0.0051,  0.0100,  ...,  0.0122, -1.0000,  0.4588],
+         ...,
+         [ 0.0319,  0.0256,  0.0163,  ...,  0.0344, -1.0000,  0.0253],
+         [ 0.0131,  0.0098,  0.0057,  ...,  0.0127, -1.0000,  0.0254],
+         [ 0.0047,  0.0089,  0.0075,  ...,  0.0110, -1.0000,  0.0247]],
+
+        [[ 0.0243,  0.0247,  0.0178,  ...,  0.0235, -1.0000,  0.0468],
+         [ 0.0343,  0.0322,  0.0164,  ...,  0.0215, -1.0000,  0.1176],
+         [ 0.0323,  0.0141,  0.0131,  ...,  0.0221, -1.0000,  0.1010],
+         ...,
+         [ 0.0088,  0.0142,  0.0091,  ...,  0.0069, -1.0000,  0.0325],
+         [ 0.0181,  0.0106,  0.0233,  ...,  0.0237, -1.0000,  0.0489],
+         [ 0.0231,  0.0096,  0.0129,  ...,  0.0130, -1.0000,  0.0540]],
+
+        [[ 0.0308,  0.0307,  0.0231,  ...,  0.0212, -1.0000,  0.0869],
+         [ 0.0325,  0.0219,  0.0333,  ...,  0.0470, -1.0000,  0.0798],
+         [ 0.0176,  0.0314,  0.0220,  ...,  0.0544, -1.0000,  0.1320],
+         ...,
+         [ 0.0153,  0.0161,  0.0213,  ...,  0.0148, -1.0000,  0.0167],
+         [ 0.0218,  0.0218,  0.0390,  ...,  0.0231, -1.0000,  0.0317],
+         [ 0.0120,  0.0348,  0.0232,  ...,  0.0505, -1.0000,  0.0465]]],
+       device='cuda:0', grad_fn=<CopySlices>), 'reserve_layer_prob': tensor([[0.8828, 0.2559, 0.2236,  ..., 0.5352, 0.7344, 0.2793],
+        [0.2109, 0.2578, 0.1406,  ..., 0.1748, 0.4199, 0.2021],
+        [0.6641, 0.6836, 0.7930,  ..., 0.8516, 0.9141, 0.7070],
+        ...,
+        [0.6289, 0.2451, 0.2930,  ..., 0.3906, 0.7344, 0.7812],
+        [0.4746, 0.2617, 0.2812,  ..., 0.7070, 0.4648, 0.4668],
+        [0.1729, 0.0757, 0.0913,  ..., 0.4297, 0.2305, 0.1943]],
+       device='cuda:0', grad_fn=<SelectBackward0>)}
+
+ ======== router_probs.min() 9.015298564918339e-05 and max():  0.9921875
+router_probs_for_selection.min() -1.0 and max():  0.8149014115333557
+reserve_layer_prob.min() 0.01068115234375 and max():  0.9921875
+after selecting vision features, reserve_layer_prob.min() 0.01068115234375 and max():  0.9921875
+selection_probs.min() 9.015298564918339e-05 and max():  0.8149014115333557
+soft_proxy.min() 0.001971866236999631 and max():  0.9066330194473267
+patch_weight.min() 0.0078125 and max():  0.98931884765625
+density_1.min() 0.00853890459984541 and max():  0.3910330533981323
+density_1_proxy.min() 0.033660877496004105 and max():  0.0701092854142189
+=================================== END COMPUTE LOAD BALANCE LOSS ===================================
+
+Using cached router probs for clip, load balance loss: 1.3092268705368042
+------------------------ END ONE STEP ------------------------
+the gradients of the models is {'model.mm_projector.0.weight': tensor(12.9276, device='cuda:0'), 'model.mm_projector.0.bias': tensor(0.3678, device='cuda:0'), 'model.mm_projector.2.weight': tensor(37.5639, device='cuda:0'), 'model.mm_projector.2.bias': tensor(1.1791, device='cuda:0'), 'router_clip._weight_fn.weights': tensor(0., device='cuda:0'), 'router_clip.reserve_gate.weight': tensor(1.3400, device='cuda:0'), 'router_clip.reserve_gate.bias': tensor(0.0254, device='cuda:0'), 'router_clip.text_attn_q.weight': tensor(0.0614, device='cuda:0'), 'router_clip.text_attn_q.bias': tensor(0.0030, device='cuda:0'), 'router_clip.text_attn_k.weight': tensor(0.0604, device='cuda:0'), 'router_clip.text_attn_k.bias': tensor(2.2053e-08, device='cuda:0')}
+==================================================
+
+ Using text conditioned routing...
+ 
+ ================== I AM IN ROUTER ENCODE IMAGES WITH CLIP  using encoder siglip! ==================
+
+ calculating forward using patch_layer branch...
+
+ ====== q.min() tensor(-1.6250, device='cuda:0', dtype=torch.bfloat16, grad_fn=<MinBackward1>) q.max() tensor(1.5312, device='cuda:0', dtype=torch.bfloat16, grad_fn=<MaxBackward1>)
+
+ ====== k.min() tensor(-31.7500, device='cuda:0', dtype=torch.bfloat16, grad_fn=<MinBackward1>) k.max() tensor(28.3750, device='cuda:0', dtype=torch.bfloat16, grad_fn=<MaxBackward1>)
+
+ ====== scores.min() tensor(-2.8906, device='cuda:0', dtype=torch.bfloat16, grad_fn=<MinBackward1>) scores.max() tensor(5.5312, device='cuda:0', dtype=torch.bfloat16, grad_fn=<MaxBackward1>)
+
+ ====== scores AFTER noise min() tensor(-2.6758, device='cuda:0', grad_fn=<MinBackward1>) scores.max() tensor(6.3700, device='cuda:0', grad_fn=<MaxBackward1>)
+
+ ====== gate_logits.min() tensor(-4.0312, device='cuda:0', dtype=torch.bfloat16, grad_fn=<MinBackward1>) gate_logits.max() tensor(4.3125, device='cuda:0', dtype=torch.bfloat16, grad_fn=<MaxBackward1>)
+
+ ====== router_probs.min() tensor(0.0001, device='cuda:0', grad_fn=<MinBackward1>) router_probs.max() tensor(0.9883, device='cuda:0', grad_fn=<MaxBackward1>)
+
+ ======= router_probs_for_selection.min() tensor(-1., device='cuda:0', grad_fn=<MinBackward1>) router_probs_for_selection.max() tensor(0.6803, device='cuda:0', grad_fn=<MaxBackward1>)
+
+ ======= reserve_layer_prob.min() tensor(0.0175, device='cuda:0', grad_fn=<MinBackward1>) reserve_layer_prob.max() tensor(0.9883, device='cuda:0', grad_fn=<MaxBackward1>)
+
+ ================================================
+
+ k: 1
+
+ router_probs_for_selection min  tensor(-1., device='cuda:0', grad_fn=<MinBackward1>) max tensor(0.6803, device='cuda:0', grad_fn=<MaxBackward1>)
+
+ getting patch_layer_and_scaling_probs with forced reserve layer...
+
+ remaining_mass min  tensor(0.0117, device='cuda:0', grad_fn=<MinBackward1>) max tensor(0.9825, device='cuda:0', grad_fn=<MaxBackward1>)
+
+ probs_sum min  tensor(0.0006, device='cuda:0', grad_fn=<MinBackward1>) max tensor(0.6803, device='cuda:0', grad_fn=<MaxBackward1>)
+
+ scale min  tensor(1.0430, device='cuda:0', grad_fn=<MinBackward1>) max  tensor(20.8743, device='cuda:0', grad_fn=<MaxBackward1>)
+
+ =================================================
+
+ ================ main loss: 8.1095
+
+ calculating aux_loss
+
+ calculating patch layer load balancing loss...
+aux_payload :  {'kind': 'patch_layer', 'router_probs': tensor([[[0.0271, 0.0122, 0.0201,  ..., 0.0114, 0.5469, 0.0054],
+         [0.0038, 0.0045, 0.0045,  ..., 0.0061, 0.8359, 0.0067],
+         [0.0098, 0.0122, 0.0200,  ..., 0.0271, 0.2500, 0.2817],
+         ...,
+         [0.0196, 0.0104, 0.0111,  ..., 0.0148, 0.5195, 0.0147],
+         [0.0082, 0.0084, 0.0059,  ..., 0.0057, 0.7812, 0.0148],
+         [0.0168, 0.0211, 0.0203,  ..., 0.0380, 0.3145, 0.0267]],
+
+        [[0.0238, 0.0254, 0.0127,  ..., 0.0328, 0.4648, 0.0267],
+         [0.0412, 0.0182, 0.0241,  ..., 0.0241, 0.2129, 0.0784],
+         [0.0324, 0.0248, 0.0211,  ..., 0.0227, 0.2090, 0.0493],
+         ...,
+         [0.0345, 0.0344, 0.0180,  ..., 0.0294, 0.3340, 0.0201],
+         [0.0273, 0.0249, 0.0101,  ..., 0.0109, 0.5234, 0.0201],
+         [0.0052, 0.0116, 0.0065,  ..., 0.0101, 0.7461, 0.0185]],
+
+        [[0.0205, 0.0225, 0.0363,  ..., 0.0260, 0.3574, 0.0476],
+         [0.0475, 0.0477, 0.0393,  ..., 0.0163, 0.2539, 0.0248],
+         [0.0294, 0.0289, 0.0224,  ..., 0.0383, 0.2871, 0.0694],
+         ...,
+         [0.0364, 0.0208, 0.0149,  ..., 0.0133, 0.3926, 0.0092],
+         [0.0143, 0.0213, 0.0147,  ..., 0.0174, 0.4648, 0.0111],
+         [0.0451, 0.0278, 0.0201,  ..., 0.0293, 0.1484, 0.0336]],
+
+        ...,
+
+        [[0.0157, 0.0167, 0.0206,  ..., 0.0385, 0.4453, 0.0544],
+         [0.0180, 0.0099, 0.0254,  ..., 0.0254, 0.5195, 0.0356],
+         [0.0112, 0.0192, 0.0140,  ..., 0.0186, 0.5234, 0.0509],
+         ...,
+         [0.0342, 0.0300, 0.0320,  ..., 0.0234, 0.3535, 0.1096],
+         [0.0264, 0.0194, 0.0212,  ..., 0.0475, 0.1611, 0.1281],
+         [0.0316, 0.0197, 0.0321,  ..., 0.0495, 0.2109, 0.0570]],
+
+        [[0.0327, 0.0166, 0.0121,  ..., 0.0234, 0.5117, 0.0259],
+         [0.0210, 0.0153, 0.0196,  ..., 0.0103, 0.3633, 0.2577],
+         [0.0063, 0.0057, 0.0050,  ..., 0.0081, 0.4355, 0.3395],
+         ...,
+         [0.0088, 0.0041, 0.0060,  ..., 0.0156, 0.8164, 0.0104],
+         [0.0228, 0.0109, 0.0164,  ..., 0.0215, 0.5430, 0.0211],
+         [0.0230, 0.0077, 0.0131,  ..., 0.0377, 0.5742, 0.0121]],
+
+        [[0.0076, 0.0104, 0.0140,  ..., 0.0156, 0.6719, 0.0830],
+         [0.0148, 0.0213, 0.0131,  ..., 0.0182, 0.5898, 0.0526],
+         [0.0196, 0.0177, 0.0196,  ..., 0.0323, 0.2617, 0.2741],
+         ...,
+         [0.0183, 0.0234, 0.0301,  ..., 0.0391, 0.2324, 0.0801],
+         [0.0176, 0.0386, 0.0404,  ..., 0.0411, 0.2061, 0.0771],
+         [0.0135, 0.0098, 0.0147,  ..., 0.0085, 0.7188, 0.0212]]],
+       device='cuda:0', grad_fn=<CopySlices>), 'router_probs_for_selection': tensor([[[ 0.0271,  0.0122,  0.0201,  ...,  0.0114, -1.0000,  0.0054],
+         [ 0.0038,  0.0045,  0.0045,  ...,  0.0061, -1.0000,  0.0067],
+         [ 0.0098,  0.0122,  0.0200,  ...,  0.0271, -1.0000,  0.2817],
+         ...,
+         [ 0.0196,  0.0104,  0.0111,  ...,  0.0148, -1.0000,  0.0147],
+         [ 0.0082,  0.0084,  0.0059,  ...,  0.0057, -1.0000,  0.0148],
+         [ 0.0168,  0.0211,  0.0203,  ...,  0.0380, -1.0000,  0.0267]],
+
+        [[ 0.0238,  0.0254,  0.0127,  ...,  0.0328, -1.0000,  0.0267],
+         [ 0.0412,  0.0182,  0.0241,  ...,  0.0241, -1.0000,  0.0784],
+         [ 0.0324,  0.0248,  0.0211,  ...,  0.0227, -1.0000,  0.0493],
+         ...,
+         [ 0.0345,  0.0344,  0.0180,  ...,  0.0294, -1.0000,  0.0201],
+         [ 0.0273,  0.0249,  0.0101,  ...,  0.0109, -1.0000,  0.0201],
+         [ 0.0052,  0.0116,  0.0065,  ...,  0.0101, -1.0000,  0.0185]],
+
+        [[ 0.0205,  0.0225,  0.0363,  ...,  0.0260, -1.0000,  0.0476],
+         [ 0.0475,  0.0477,  0.0393,  ...,  0.0163, -1.0000,  0.0248],
+         [ 0.0294,  0.0289,  0.0224,  ...,  0.0383, -1.0000,  0.0694],
+         ...,
+         [ 0.0364,  0.0208,  0.0149,  ...,  0.0133, -1.0000,  0.0092],
+         [ 0.0143,  0.0213,  0.0147,  ...,  0.0174, -1.0000,  0.0111],
+         [ 0.0451,  0.0278,  0.0201,  ...,  0.0293, -1.0000,  0.0336]],
+
+        ...,
+
+        [[ 0.0157,  0.0167,  0.0206,  ...,  0.0385, -1.0000,  0.0544],
+         [ 0.0180,  0.0099,  0.0254,  ...,  0.0254, -1.0000,  0.0356],
+         [ 0.0112,  0.0192,  0.0140,  ...,  0.0186, -1.0000,  0.0509],
+         ...,
+         [ 0.0342,  0.0300,  0.0320,  ...,  0.0234, -1.0000,  0.1096],
+         [ 0.0264,  0.0194,  0.0212,  ...,  0.0475, -1.0000,  0.1281],
+         [ 0.0316,  0.0197,  0.0321,  ...,  0.0495, -1.0000,  0.0570]],
+
+        [[ 0.0327,  0.0166,  0.0121,  ...,  0.0234, -1.0000,  0.0259],
+         [ 0.0210,  0.0153,  0.0196,  ...,  0.0103, -1.0000,  0.2577],
+         [ 0.0063,  0.0057,  0.0050,  ...,  0.0081, -1.0000,  0.3395],
+         ...,
+         [ 0.0088,  0.0041,  0.0060,  ...,  0.0156, -1.0000,  0.0104],
+         [ 0.0228,  0.0109,  0.0164,  ...,  0.0215, -1.0000,  0.0211],
+         [ 0.0230,  0.0077,  0.0131,  ...,  0.0377, -1.0000,  0.0121]],
+
+        [[ 0.0076,  0.0104,  0.0140,  ...,  0.0156, -1.0000,  0.0830],
+         [ 0.0148,  0.0213,  0.0131,  ...,  0.0182, -1.0000,  0.0526],
+         [ 0.0196,  0.0177,  0.0196,  ...,  0.0323, -1.0000,  0.2741],
+         ...,
+         [ 0.0183,  0.0234,  0.0301,  ...,  0.0391, -1.0000,  0.0801],
+         [ 0.0176,  0.0386,  0.0404,  ...,  0.0411, -1.0000,  0.0771],
+         [ 0.0135,  0.0098,  0.0147,  ...,  0.0085, -1.0000,  0.0212]]],
+       device='cuda:0', grad_fn=<CopySlices>), 'reserve_layer_prob': tensor([[0.5469, 0.8359, 0.2500,  ..., 0.5195, 0.7812, 0.3145],
+        [0.4648, 0.2129, 0.2090,  ..., 0.3340, 0.5234, 0.7461],
+        [0.3574, 0.2539, 0.2871,  ..., 0.3926, 0.4648, 0.1484],
+        ...,
+        [0.4453, 0.5195, 0.5234,  ..., 0.3535, 0.1611, 0.2109],
+        [0.5117, 0.3633, 0.4355,  ..., 0.8164, 0.5430, 0.5742],
+        [0.6719, 0.5898, 0.2617,  ..., 0.2324, 0.2061, 0.7188]],
+       device='cuda:0', grad_fn=<SelectBackward0>)}
+
+ ======== router_probs.min() 0.00010350365482736379 and max():  0.98828125
+router_probs_for_selection.min() -1.0 and max():  0.6803120374679565
+reserve_layer_prob.min() 0.0174560546875 and max():  0.98828125
+after selecting vision features, reserve_layer_prob.min() 0.0174560546875 and max():  0.98828125
+selection_probs.min() 0.00010350365482736379 and max():  0.6803120374679565
+soft_proxy.min() 0.0011216280981898308 and max():  0.9587761163711548
+patch_weight.min() 0.01171875 and max():  0.9825439453125
+density_1.min() 0.00894123688340187 and max():  0.3570602238178253
+density_1_proxy.min() 0.033632099628448486 and max():  0.06737356632947922
+=================================== END COMPUTE LOAD BALANCE LOSS ===================================
+
+Using cached router probs for clip, load balance loss: 1.2591716051101685
+------------------------ END ONE STEP ------------------------
+the gradients of the models is {'model.mm_projector.0.weight': tensor(24.4894, device='cuda:0'), 'model.mm_projector.0.bias': tensor(0.7292, device='cuda:0'), 'model.mm_projector.2.weight': tensor(72.8341, device='cuda:0'), 'model.mm_projector.2.bias': tensor(2.3658, device='cuda:0'), 'router_clip._weight_fn.weights': tensor(0., device='cuda:0'), 'router_clip.reserve_gate.weight': tensor(3.0237, device='cuda:0'), 'router_clip.reserve_gate.bias': tensor(0.0957, device='cuda:0'), 'router_clip.text_attn_q.weight': tensor(0.1153, device='cuda:0'), 'router_clip.text_attn_q.bias': tensor(0.0056, device='cuda:0'), 'router_clip.text_attn_k.weight': tensor(0.1135, device='cuda:0'), 'router_clip.text_attn_k.bias': tensor(2.5357e-08, device='cuda:0')}
+==================================================
+{'loss': 7.9957, 'grad_norm': 76.94049835205078, 'learning_rate': 1.9083969465648855e-07, 'epoch': 0.0}
+
+ Using text conditioned routing...
+ 
+ ================== I AM IN ROUTER ENCODE IMAGES WITH CLIP  using encoder siglip! ==================
+
+ calculating forward using patch_layer branch...
+
+ ====== q.min() tensor(-1.7109, device='cuda:0', dtype=torch.bfloat16, grad_fn=<MinBackward1>) q.max() tensor(1.6094, device='cuda:0', dtype=torch.bfloat16, grad_fn=<MaxBackward1>)
+
+ ====== k.min() tensor(-33., device='cuda:0', dtype=torch.bfloat16, grad_fn=<MinBackward1>) k.max() tensor(29.3750, device='cuda:0', dtype=torch.bfloat16, grad_fn=<MaxBackward1>)
+
+ ====== scores.min() tensor(-2.9062, device='cuda:0', dtype=torch.bfloat16, grad_fn=<MinBackward1>) scores.max() tensor(6.7500, device='cuda:0', dtype=torch.bfloat16, grad_fn=<MaxBackward1>)
+
+ ====== scores AFTER noise min() tensor(-2.6669, device='cuda:0', grad_fn=<MinBackward1>) scores.max() tensor(7.7274, device='cuda:0', grad_fn=<MaxBackward1>)
+
+ ====== gate_logits.min() tensor(-4.2188, device='cuda:0', dtype=torch.bfloat16, grad_fn=<MinBackward1>) gate_logits.max() tensor(4.9688, device='cuda:0', dtype=torch.bfloat16, grad_fn=<MaxBackward1>)
+
+ ====== router_probs.min() tensor(0.0002, device='cuda:0', grad_fn=<MinBackward1>) router_probs.max() tensor(0.9922, device='cuda:0', grad_fn=<MaxBackward1>)
+
+ ======= router_probs_for_selection.min() tensor(-1., device='cuda:0', grad_fn=<MinBackward1>) router_probs_for_selection.max() tensor(0.4262, device='cuda:0', grad_fn=<MaxBackward1>)
+
+ ======= reserve_layer_prob.min() tensor(0.0145, device='cuda:0', grad_fn=<MinBackward1>) reserve_layer_prob.max() tensor(0.9922, device='cuda:0', grad_fn=<MaxBackward1>)
+
+ ================================================
+
+ k: 1
+
+ router_probs_for_selection min  tensor(-1., device='cuda:0', grad_fn=<MinBackward1>) max tensor(0.4262, device='cuda:0', grad_fn=<MaxBackward1>)
+
+ getting patch_layer_and_scaling_probs with forced reserve layer...
+
+ remaining_mass min  tensor(0.0078, device='cuda:0', grad_fn=<MinBackward1>) max tensor(0.9855, device='cuda:0', grad_fn=<MaxBackward1>)
+
+ probs_sum min  tensor(0.0004, device='cuda:0', grad_fn=<MinBackward1>) max tensor(0.4262, device='cuda:0', grad_fn=<MaxBackward1>)
+
+ scale min  tensor(1.7504, device='cuda:0', grad_fn=<MinBackward1>) max  tensor(22.8180, device='cuda:0', grad_fn=<MaxBackward1>)
+
+ =================================================
+
+ ================ main loss: 7.7360
+
+ calculating aux_loss
+
+ calculating patch layer load balancing loss...
+aux_payload :  {'kind': 'patch_layer', 'router_probs': tensor([[[0.0118, 0.0082, 0.0113,  ..., 0.0087, 0.7188, 0.0161],
+         [0.0315, 0.0265, 0.0270,  ..., 0.0411, 0.1504, 0.0968],
+         [0.0218, 0.0225, 0.0175,  ..., 0.0353, 0.2520, 0.1666],
+         ...,
+         [0.0135, 0.0133, 0.0183,  ..., 0.0109, 0.6133, 0.0157],
+         [0.0081, 0.0112, 0.0077,  ..., 0.0068, 0.7461, 0.0133],
+         [0.0133, 0.0127, 0.0155,  ..., 0.0134, 0.5664, 0.0288]],
+
+        [[0.0168, 0.0237, 0.0214,  ..., 0.0220, 0.4785, 0.0303],
+         [0.0263, 0.0182, 0.0182,  ..., 0.0185, 0.4238, 0.0271],
+         [0.0211, 0.0201, 0.0253,  ..., 0.0234, 0.2227, 0.2320],
+         ...,
+         [0.0137, 0.0101, 0.0132,  ..., 0.0083, 0.7227, 0.0080],
+         [0.0126, 0.0187, 0.0150,  ..., 0.0140, 0.5859, 0.0133],
+         [0.0129, 0.0139, 0.0114,  ..., 0.0171, 0.6328, 0.0139]],
+
+        [[0.0045, 0.0059, 0.0052,  ..., 0.0074, 0.8594, 0.0060],
+         [0.0222, 0.0274, 0.0298,  ..., 0.0417, 0.2324, 0.0866],
+         [0.0227, 0.0288, 0.0250,  ..., 0.0291, 0.1855, 0.1021],
+         ...,
+         [0.0233, 0.0169, 0.0234,  ..., 0.0168, 0.4492, 0.0214],
+         [0.0097, 0.0135, 0.0123,  ..., 0.0193, 0.6250, 0.0213],
+         [0.0194, 0.0237, 0.0190,  ..., 0.0235, 0.3867, 0.0301]],
+
+        ...,
+
+        [[0.0248, 0.0166, 0.0225,  ..., 0.0185, 0.4961, 0.0266],
+         [0.0190, 0.0175, 0.0282,  ..., 0.0223, 0.3672, 0.0504],
+         [0.0222, 0.0209, 0.0225,  ..., 0.0183, 0.4238, 0.0444],
+         ...,
+         [0.0141, 0.0136, 0.0173,  ..., 0.0217, 0.6055, 0.0190],
+         [0.0203, 0.0173, 0.0166,  ..., 0.0233, 0.4219, 0.0245],
+         [0.0253, 0.0226, 0.0259,  ..., 0.0204, 0.4375, 0.0371]],
+
+        [[0.0193, 0.0185, 0.0227,  ..., 0.0238, 0.4238, 0.0308],
+         [0.0307, 0.0191, 0.0294,  ..., 0.0333, 0.2637, 0.0989],
+         [0.0279, 0.0212, 0.0269,  ..., 0.0265, 0.2871, 0.0728],
+         ...,
+         [0.0271, 0.0252, 0.0278,  ..., 0.0190, 0.3672, 0.0256],
+         [0.0219, 0.0265, 0.0283,  ..., 0.0227, 0.3320, 0.0345],
+         [0.0185, 0.0205, 0.0217,  ..., 0.0189, 0.4551, 0.0328]],
+
+        [[0.0120, 0.0147, 0.0155,  ..., 0.0131, 0.6445, 0.0196],
+         [0.0121, 0.0166, 0.0133,  ..., 0.0108, 0.6367, 0.0184],
+         [0.0212, 0.0211, 0.0160,  ..., 0.0150, 0.5312, 0.0166],
+         ...,
+         [0.0204, 0.0211, 0.0289,  ..., 0.0297, 0.3262, 0.0313],
+         [0.0152, 0.0152, 0.0137,  ..., 0.0153, 0.5703, 0.0214],
+         [0.0225, 0.0221, 0.0182,  ..., 0.0331, 0.3750, 0.0272]]],
+       device='cuda:0', grad_fn=<CopySlices>), 'router_probs_for_selection': tensor([[[ 0.0118,  0.0082,  0.0113,  ...,  0.0087, -1.0000,  0.0161],
+         [ 0.0315,  0.0265,  0.0270,  ...,  0.0411, -1.0000,  0.0968],
+         [ 0.0218,  0.0225,  0.0175,  ...,  0.0353, -1.0000,  0.1666],
+         ...,
+         [ 0.0135,  0.0133,  0.0183,  ...,  0.0109, -1.0000,  0.0157],
+         [ 0.0081,  0.0112,  0.0077,  ...,  0.0068, -1.0000,  0.0133],
+         [ 0.0133,  0.0127,  0.0155,  ...,  0.0134, -1.0000,  0.0288]],
+
+        [[ 0.0168,  0.0237,  0.0214,  ...,  0.0220, -1.0000,  0.0303],
+         [ 0.0263,  0.0182,  0.0182,  ...,  0.0185, -1.0000,  0.0271],
+         [ 0.0211,  0.0201,  0.0253,  ...,  0.0234, -1.0000,  0.2320],
+         ...,
+         [ 0.0137,  0.0101,  0.0132,  ...,  0.0083, -1.0000,  0.0080],
+         [ 0.0126,  0.0187,  0.0150,  ...,  0.0140, -1.0000,  0.0133],
+         [ 0.0129,  0.0139,  0.0114,  ...,  0.0171, -1.0000,  0.0139]],
+
+        [[ 0.0045,  0.0059,  0.0052,  ...,  0.0074, -1.0000,  0.0060],
+         [ 0.0222,  0.0274,  0.0298,  ...,  0.0417, -1.0000,  0.0866],
+         [ 0.0227,  0.0288,  0.0250,  ...,  0.0291, -1.0000,  0.1021],
+         ...,
+         [ 0.0233,  0.0169,  0.0234,  ...,  0.0168, -1.0000,  0.0214],
+         [ 0.0097,  0.0135,  0.0123,  ...,  0.0193, -1.0000,  0.0213],
+         [ 0.0194,  0.0237,  0.0190,  ...,  0.0235, -1.0000,  0.0301]],
+
+        ...,
+
+        [[ 0.0248,  0.0166,  0.0225,  ...,  0.0185, -1.0000,  0.0266],
+         [ 0.0190,  0.0175,  0.0282,  ...,  0.0223, -1.0000,  0.0504],
+         [ 0.0222,  0.0209,  0.0225,  ...,  0.0183, -1.0000,  0.0444],
+         ...,
+         [ 0.0141,  0.0136,  0.0173,  ...,  0.0217, -1.0000,  0.0190],
+         [ 0.0203,  0.0173,  0.0166,  ...,  0.0233, -1.0000,  0.0245],
+         [ 0.0253,  0.0226,  0.0259,  ...,  0.0204, -1.0000,  0.0371]],
+
+        [[ 0.0193,  0.0185,  0.0227,  ...,  0.0238, -1.0000,  0.0308],
+         [ 0.0307,  0.0191,  0.0294,  ...,  0.0333, -1.0000,  0.0989],
+         [ 0.0279,  0.0212,  0.0269,  ...,  0.0265, -1.0000,  0.0728],
+         ...,
+         [ 0.0271,  0.0252,  0.0278,  ...,  0.0190, -1.0000,  0.0256],
+         [ 0.0219,  0.0265,  0.0283,  ...,  0.0227, -1.0000,  0.0345],
+         [ 0.0185,  0.0205,  0.0217,  ...,  0.0189, -1.0000,  0.0328]],
+
+        [[ 0.0120,  0.0147,  0.0155,  ...,  0.0131, -1.0000,  0.0196],
+         [ 0.0121,  0.0166,  0.0133,  ...,  0.0108, -1.0000,  0.0184],
+         [ 0.0212,  0.0211,  0.0160,  ...,  0.0150, -1.0000,  0.0166],
+         ...,
+         [ 0.0204,  0.0211,  0.0289,  ...,  0.0297, -1.0000,  0.0313],
+         [ 0.0152,  0.0152,  0.0137,  ...,  0.0153, -1.0000,  0.0214],
+         [ 0.0225,  0.0221,  0.0182,  ...,  0.0331, -1.0000,  0.0272]]],
+       device='cuda:0', grad_fn=<CopySlices>), 'reserve_layer_prob': tensor([[0.7188, 0.1504, 0.2520,  ..., 0.6133, 0.7461, 0.5664],
+        [0.4785, 0.4238, 0.2227,  ..., 0.7227, 0.5859, 0.6328],
+        [0.8594, 0.2324, 0.1855,  ..., 0.4492, 0.6250, 0.3867],
+        ...,
+        [0.4961, 0.3672, 0.4238,  ..., 0.6055, 0.4219, 0.4375],
+        [0.4238, 0.2637, 0.2871,  ..., 0.3672, 0.3320, 0.4551],
+        [0.6445, 0.6367, 0.5312,  ..., 0.3262, 0.5703, 0.3750]],
+       device='cuda:0', grad_fn=<SelectBackward0>)}
+
+ ======== router_probs.min() 0.00019889682880602777 and max():  0.9921875
+router_probs_for_selection.min() -1.0 and max():  0.42624786496162415
+reserve_layer_prob.min() 0.0145263671875 and max():  0.9921875
+after selecting vision features, reserve_layer_prob.min() 0.0145263671875 and max():  0.9921875
+selection_probs.min() 0.00019889682880602777 and max():  0.42624786496162415
+soft_proxy.min() 0.012044432573020458 and max():  0.571306049823761
+patch_weight.min() 0.0078125 and max():  0.9854736328125
+density_1.min() 0.01009216345846653 and max():  0.35698726773262024
+density_1_proxy.min() 0.036207281053066254 and max():  0.04835914447903633
+=================================== END COMPUTE LOAD BALANCE LOSS ===================================
+
+Using cached router probs for clip, load balance loss: 1.089863657951355
+------------------------ END ONE STEP ------------------------
+the gradients of the models is {'model.mm_projector.0.weight': tensor(13.7223, device='cuda:0'), 'model.mm_projector.0.bias': tensor(0.4435, device='cuda:0'), 'model.mm_projector.2.weight': tensor(41.4503, device='cuda:0'), 'model.mm_projector.2.bias': tensor(1.4508, device='cuda:0'), 'router_clip._weight_fn.weights': tensor(0., device='cuda:0'), 'router_clip.reserve_gate.weight': tensor(2.0849, device='cuda:0'), 'router_clip.reserve_gate.bias': tensor(0.0840, device='cuda:0'), 'router_clip.text_attn_q.weight': tensor(0.0194, device='cuda:0'), 'router_clip.text_attn_q.bias': tensor(0.0009, device='cuda:0'), 'router_clip.text_attn_k.weight': tensor(0.0190, device='cuda:0'), 'router_clip.text_attn_k.bias': tensor(7.6449e-09, device='cuda:0')}
+==================================================
+
+ Using text conditioned routing...
+ 
+ ================== I AM IN ROUTER ENCODE IMAGES WITH CLIP  using encoder siglip! ==================
+
+ calculating forward using patch_layer branch...
+
+ ====== q.min() tensor(-1.5625, device='cuda:0', dtype=torch.bfloat16, grad_fn=<MinBackward1>) q.max() tensor(1.6797, device='cuda:0', dtype=torch.bfloat16, grad_fn=<MaxBackward1>)
+
+ ====== k.min() tensor(-30.1250, device='cuda:0', dtype=torch.bfloat16, grad_fn=<MinBackward1>) k.max() tensor(30.7500, device='cuda:0', dtype=torch.bfloat16, grad_fn=<MaxBackward1>)
+
+ ====== scores.min() tensor(-3.5000, device='cuda:0', dtype=torch.bfloat16, grad_fn=<MinBackward1>) scores.max() tensor(6.9062, device='cuda:0', dtype=torch.bfloat16, grad_fn=<MaxBackward1>)
+
+ ====== scores AFTER noise min() tensor(-3.2378, device='cuda:0', grad_fn=<MinBackward1>) scores.max() tensor(7.6343, device='cuda:0', grad_fn=<MaxBackward1>)
+
+ ====== gate_logits.min() tensor(-5.2500, device='cuda:0', dtype=torch.bfloat16, grad_fn=<MinBackward1>) gate_logits.max() tensor(5.6562, device='cuda:0', dtype=torch.bfloat16, grad_fn=<MaxBackward1>)
+
+ ====== router_probs.min() tensor(6.4530e-05, device='cuda:0', grad_fn=<MinBackward1>) router_probs.max() tensor(0.9961, device='cuda:0', grad_fn=<MaxBackward1>)
+
+ ======= router_probs_for_selection.min() tensor(-1., device='cuda:0', grad_fn=<MinBackward1>) router_probs_for_selection.max() tensor(0.3847, device='cuda:0', grad_fn=<MaxBackward1>)
+
+ ======= reserve_layer_prob.min() tensor(0.0052, device='cuda:0', grad_fn=<MinBackward1>) reserve_layer_prob.max() tensor(0.9961, device='cuda:0', grad_fn=<MaxBackward1>)
+
+ ================================================
+
+ k: 1
+
+ router_probs_for_selection min  tensor(-1., device='cuda:0', grad_fn=<MinBackward1>) max tensor(0.3847, device='cuda:0', grad_fn=<MaxBackward1>)
+
+ getting patch_layer_and_scaling_probs with forced reserve layer...
+
+ remaining_mass min  tensor(0.0039, device='cuda:0', grad_fn=<MinBackward1>) max tensor(0.9948, device='cuda:0', grad_fn=<MaxBackward1>)
+
+ probs_sum min  tensor(0.0002, device='cuda:0', grad_fn=<MinBackward1>) max tensor(0.3847, device='cuda:0', grad_fn=<MaxBackward1>)
+
+ scale min  tensor(1.5867, device='cuda:0', grad_fn=<MinBackward1>) max  tensor(23.0788, device='cuda:0', grad_fn=<MaxBackward1>)
+
+ =================================================
+
+ ================ main loss: 8.5279
+
+ calculating aux_loss
+
+ calculating patch layer load balancing loss...
+aux_payload :  {'kind': 'patch_layer', 'router_probs': tensor([[[0.0186, 0.0131, 0.0122,  ..., 0.0131, 0.6094, 0.0211],
+         [0.0118, 0.0153, 0.0119,  ..., 0.0149, 0.3008, 0.3174],
+         [0.0125, 0.0144, 0.0156,  ..., 0.0157, 0.2812, 0.3322],
+         ...,
+         [0.0049, 0.0036, 0.0051,  ..., 0.0049, 0.8789, 0.0064],
+         [0.0071, 0.0072, 0.0068,  ..., 0.0083, 0.7852, 0.0081],
+         [0.0102, 0.0112, 0.0090,  ..., 0.0086, 0.7734, 0.0112]],
+
+        [[0.0171, 0.0185, 0.0155,  ..., 0.0225, 0.4570, 0.0479],
+         [0.0170, 0.0165, 0.0190,  ..., 0.0249, 0.3594, 0.1215],
+         [0.0191, 0.0165, 0.0184,  ..., 0.0232, 0.4082, 0.1240],
+         ...,
+         [0.0060, 0.0062, 0.0086,  ..., 0.0067, 0.8242, 0.0106],
+         [0.0150, 0.0132, 0.0107,  ..., 0.0176, 0.6445, 0.0367],
+         [0.0109, 0.0123, 0.0125,  ..., 0.0172, 0.5977, 0.0545]],
+
+        [[0.0379, 0.0334, 0.0364,  ..., 0.0224, 0.2178, 0.0225],
+         [0.0226, 0.0275, 0.0292,  ..., 0.0236, 0.2227, 0.0705],
+         [0.0293, 0.0312, 0.0277,  ..., 0.0322, 0.2852, 0.0711],
+         ...,
+         [0.0192, 0.0177, 0.0154,  ..., 0.0141, 0.5781, 0.0131],
+         [0.0220, 0.0209, 0.0208,  ..., 0.0171, 0.4844, 0.0175],
+         [0.0249, 0.0264, 0.0248,  ..., 0.0175, 0.4023, 0.0225]],
+
+        ...,
+
+        [[0.0253, 0.0196, 0.0211,  ..., 0.0244, 0.3984, 0.0258],
+         [0.0240, 0.0347, 0.0315,  ..., 0.0352, 0.1177, 0.0799],
+         [0.0263, 0.0352, 0.0289,  ..., 0.0262, 0.1406, 0.0932],
+         ...,
+         [0.0353, 0.0355, 0.0269,  ..., 0.0438, 0.0952, 0.0383],
+         [0.0278, 0.0260, 0.0282,  ..., 0.0207, 0.2754, 0.0287],
+         [0.0305, 0.0291, 0.0258,  ..., 0.0199, 0.3496, 0.0259]],
+
+        [[0.0093, 0.0105, 0.0088,  ..., 0.0084, 0.7305, 0.0074],
+         [0.0234, 0.0330, 0.0203,  ..., 0.0264, 0.2324, 0.0752],
+         [0.0233, 0.0215, 0.0272,  ..., 0.0344, 0.2695, 0.0607],
+         ...,
+         [0.0257, 0.0211, 0.0285,  ..., 0.0376, 0.2734, 0.0282],
+         [0.0151, 0.0171, 0.0134,  ..., 0.0171, 0.5898, 0.0130],
+         [0.0100, 0.0132, 0.0094,  ..., 0.0124, 0.6914, 0.0157]],
+
+        [[0.0040, 0.0041, 0.0036,  ..., 0.0035, 0.8945, 0.0048],
+         [0.0236, 0.0215, 0.0176,  ..., 0.0242, 0.4141, 0.0581],
+         [0.0214, 0.0225, 0.0158,  ..., 0.0196, 0.4648, 0.0591],
+         ...,
+         [0.0174, 0.0244, 0.0203,  ..., 0.0163, 0.5039, 0.0168],
+         [0.0146, 0.0163, 0.0111,  ..., 0.0113, 0.6641, 0.0106],
+         [0.0133, 0.0119, 0.0131,  ..., 0.0093, 0.6875, 0.0105]]],
+       device='cuda:0', grad_fn=<CopySlices>), 'router_probs_for_selection': tensor([[[ 0.0186,  0.0131,  0.0122,  ...,  0.0131, -1.0000,  0.0211],
+         [ 0.0118,  0.0153,  0.0119,  ...,  0.0149, -1.0000,  0.3174],
+         [ 0.0125,  0.0144,  0.0156,  ...,  0.0157, -1.0000,  0.3322],
+         ...,
+         [ 0.0049,  0.0036,  0.0051,  ...,  0.0049, -1.0000,  0.0064],
+         [ 0.0071,  0.0072,  0.0068,  ...,  0.0083, -1.0000,  0.0081],
+         [ 0.0102,  0.0112,  0.0090,  ...,  0.0086, -1.0000,  0.0112]],
+
+        [[ 0.0171,  0.0185,  0.0155,  ...,  0.0225, -1.0000,  0.0479],
+         [ 0.0170,  0.0165,  0.0190,  ...,  0.0249, -1.0000,  0.1215],
+         [ 0.0191,  0.0165,  0.0184,  ...,  0.0232, -1.0000,  0.1240],
+         ...,
+         [ 0.0060,  0.0062,  0.0086,  ...,  0.0067, -1.0000,  0.0106],
+         [ 0.0150,  0.0132,  0.0107,  ...,  0.0176, -1.0000,  0.0367],
+         [ 0.0109,  0.0123,  0.0125,  ...,  0.0172, -1.0000,  0.0545]],
+
+        [[ 0.0379,  0.0334,  0.0364,  ...,  0.0224, -1.0000,  0.0225],
+         [ 0.0226,  0.0275,  0.0292,  ...,  0.0236, -1.0000,  0.0705],
+         [ 0.0293,  0.0312,  0.0277,  ...,  0.0322, -1.0000,  0.0711],
+         ...,
+         [ 0.0192,  0.0177,  0.0154,  ...,  0.0141, -1.0000,  0.0131],
+         [ 0.0220,  0.0209,  0.0208,  ...,  0.0171, -1.0000,  0.0175],
+         [ 0.0249,  0.0264,  0.0248,  ...,  0.0175, -1.0000,  0.0225]],
+
+        ...,
+
+        [[ 0.0253,  0.0196,  0.0211,  ...,  0.0244, -1.0000,  0.0258],
+         [ 0.0240,  0.0347,  0.0315,  ...,  0.0352, -1.0000,  0.0799],
+         [ 0.0263,  0.0352,  0.0289,  ...,  0.0262, -1.0000,  0.0932],
+         ...,
+         [ 0.0353,  0.0355,  0.0269,  ...,  0.0438, -1.0000,  0.0383],
+         [ 0.0278,  0.0260,  0.0282,  ...,  0.0207, -1.0000,  0.0287],
+         [ 0.0305,  0.0291,  0.0258,  ...,  0.0199, -1.0000,  0.0259]],
+
+        [[ 0.0093,  0.0105,  0.0088,  ...,  0.0084, -1.0000,  0.0074],
+         [ 0.0234,  0.0330,  0.0203,  ...,  0.0264, -1.0000,  0.0752],
+         [ 0.0233,  0.0215,  0.0272,  ...,  0.0344, -1.0000,  0.0607],
+         ...,
+         [ 0.0257,  0.0211,  0.0285,  ...,  0.0376, -1.0000,  0.0282],
+         [ 0.0151,  0.0171,  0.0134,  ...,  0.0171, -1.0000,  0.0130],
+         [ 0.0100,  0.0132,  0.0094,  ...,  0.0124, -1.0000,  0.0157]],
+
+        [[ 0.0040,  0.0041,  0.0036,  ...,  0.0035, -1.0000,  0.0048],
+         [ 0.0236,  0.0215,  0.0176,  ...,  0.0242, -1.0000,  0.0581],
+         [ 0.0214,  0.0225,  0.0158,  ...,  0.0196, -1.0000,  0.0591],
+         ...,
+         [ 0.0174,  0.0244,  0.0203,  ...,  0.0163, -1.0000,  0.0168],
+         [ 0.0146,  0.0163,  0.0111,  ...,  0.0113, -1.0000,  0.0106],
+         [ 0.0133,  0.0119,  0.0131,  ...,  0.0093, -1.0000,  0.0105]]],
+       device='cuda:0', grad_fn=<CopySlices>), 'reserve_layer_prob': tensor([[0.6094, 0.3008, 0.2812,  ..., 0.8789, 0.7852, 0.7734],
+        [0.4570, 0.3594, 0.4082,  ..., 0.8242, 0.6445, 0.5977],
+        [0.2178, 0.2227, 0.2852,  ..., 0.5781, 0.4844, 0.4023],
+        ...,
+        [0.3984, 0.1177, 0.1406,  ..., 0.0952, 0.2754, 0.3496],
+        [0.7305, 0.2324, 0.2695,  ..., 0.2734, 0.5898, 0.6914],
+        [0.8945, 0.4141, 0.4648,  ..., 0.5039, 0.6641, 0.6875]],
+       device='cuda:0', grad_fn=<SelectBackward0>)}
+
+ ======== router_probs.min() 6.453009700635448e-05 and max():  0.99609375
+router_probs_for_selection.min() -1.0 and max():  0.3846977949142456
+reserve_layer_prob.min() 0.005218505859375 and max():  0.99609375
+after selecting vision features, reserve_layer_prob.min() 0.005218505859375 and max():  0.99609375
+selection_probs.min() 6.453009700635448e-05 and max():  0.3846977949142456
+soft_proxy.min() 0.007120170630514622 and max():  0.6302499771118164
+patch_weight.min() 0.00390625 and max():  0.994781494140625
+density_1.min() 0.010020166635513306 and max():  0.3584325611591339
+density_1_proxy.min() 0.03653935343027115 and max():  0.04794543236494064
+=================================== END COMPUTE LOAD BALANCE LOSS ===================================
+
+Using cached router probs for clip, load balance loss: 1.085769534111023
+------------------------ END ONE STEP ------------------------
+the gradients of the models is {'model.mm_projector.0.weight': tensor(27.8521, device='cuda:0'), 'model.mm_projector.0.bias': tensor(0.8647, device='cuda:0'), 'model.mm_projector.2.weight': tensor(82.5389, device='cuda:0'), 'model.mm_projector.2.bias': tensor(2.8053, device='cuda:0'), 'router_clip._weight_fn.weights': tensor(0., device='cuda:0'), 'router_clip.reserve_gate.weight': tensor(3.4110, device='cuda:0'), 'router_clip.reserve_gate.bias': tensor(0.1235, device='cuda:0'), 'router_clip.text_attn_q.weight': tensor(0.0375, device='cuda:0'), 'router_clip.text_attn_q.bias': tensor(0.0019, device='cuda:0'), 'router_clip.text_attn_k.weight': tensor(0.0368, device='cuda:0'), 'router_clip.text_attn_k.bias': tensor(9.5048e-09, device='cuda:0')}
+==================================================
+{'loss': 8.1428, 'grad_norm': 87.22777557373047, 'learning_rate': 3.816793893129771e-07, 'epoch': 0.0}
+
+ Using text conditioned routing...
+ 
+ ================== I AM IN ROUTER ENCODE IMAGES WITH CLIP  using encoder siglip! ==================
+
+ calculating forward using patch_layer branch...
+
+ ====== q.min() tensor(-1.6797, device='cuda:0', dtype=torch.bfloat16, grad_fn=<MinBackward1>) q.max() tensor(1.8516, device='cuda:0', dtype=torch.bfloat16, grad_fn=<MaxBackward1>)
+
+ ====== k.min() tensor(-30.1250, device='cuda:0', dtype=torch.bfloat16, grad_fn=<MinBackward1>) k.max() tensor(27.2500, device='cuda:0', dtype=torch.bfloat16, grad_fn=<MaxBackward1>)
+
+ ====== scores.min() tensor(-2.6094, device='cuda:0', dtype=torch.bfloat16, grad_fn=<MinBackward1>) scores.max() tensor(6.2812, device='cuda:0', dtype=torch.bfloat16, grad_fn=<MaxBackward1>)
+
+ ====== scores AFTER noise min() tensor(-2.3876, device='cuda:0', grad_fn=<MinBackward1>) scores.max() tensor(6.6664, device='cuda:0', grad_fn=<MaxBackward1>)
+
+ ====== gate_logits.min() tensor(-4.7812, device='cuda:0', dtype=torch.bfloat16, grad_fn=<MinBackward1>) gate_logits.max() tensor(6.5938, device='cuda:0', dtype=torch.bfloat16, grad_fn=<MaxBackward1>)
+
+ ====== router_probs.min() tensor(0., device='cuda:0', grad_fn=<MinBackward1>) router_probs.max() tensor(1., device='cuda:0', grad_fn=<MaxBackward1>)
+
+ ======= router_probs_for_selection.min() tensor(-1., device='cuda:0', grad_fn=<MinBackward1>) router_probs_for_selection.max() tensor(0.2610, device='cuda:0', grad_fn=<MaxBackward1>)
+
+ ======= reserve_layer_prob.min() tensor(0.0083, device='cuda:0', grad_fn=<MinBackward1>) reserve_layer_prob.max() tensor(1., device='cuda:0', grad_fn=<MaxBackward1>)
+
+ ================================================
+
+ k: 1
+
+ router_probs_for_selection min  tensor(-1., device='cuda:0', grad_fn=<MinBackward1>) max tensor(0.2610, device='cuda:0', grad_fn=<MaxBackward1>)
+
+ getting patch_layer_and_scaling_probs with forced reserve layer...
+
+ remaining_mass min  tensor(0., device='cuda:0', grad_fn=<MinBackward1>) max tensor(0.9917, device='cuda:0', grad_fn=<MaxBackward1>)
+
+ probs_sum min  tensor(0., device='cuda:0', grad_fn=<MinBackward1>) max tensor(0.2610, device='cuda:0', grad_fn=<MaxBackward1>)
+
+ scale min  tensor(0., device='cuda:0', grad_fn=<MinBackward1>) max  tensor(22.7604, device='cuda:0', grad_fn=<MaxBackward1>)
+
+ =================================================
+
+ ================ main loss: 7.6975
+
+ calculating aux_loss
+
+ calculating patch layer load balancing loss...
+aux_payload :  {'kind': 'patch_layer', 'router_probs': tensor([[[0.0159, 0.0210, 0.0138,  ..., 0.0193, 0.5508, 0.0284],
+         [0.0245, 0.0307, 0.0309,  ..., 0.0319, 0.2080, 0.1089],
+         [0.0263, 0.0231, 0.0293,  ..., 0.0335, 0.2236, 0.1232],
+         ...,
+         [0.0195, 0.0227, 0.0241,  ..., 0.0225, 0.3867, 0.0190],
+         [0.0224, 0.0190, 0.0168,  ..., 0.0149, 0.5742, 0.0185],
+         [0.0168, 0.0157, 0.0168,  ..., 0.0150, 0.6133, 0.0148]],
+
+        [[0.0219, 0.0240, 0.0216,  ..., 0.0175, 0.4492, 0.0450],
+         [0.0173, 0.0175, 0.0212,  ..., 0.0424, 0.2852, 0.0982],
+         [0.0187, 0.0136, 0.0181,  ..., 0.0349, 0.2871, 0.1737],
+         ...,
+         [0.0070, 0.0094, 0.0083,  ..., 0.0078, 0.7539, 0.0139],
+         [0.0165, 0.0118, 0.0146,  ..., 0.0146, 0.5898, 0.0192],
+         [0.0129, 0.0130, 0.0115,  ..., 0.0104, 0.7070, 0.0124]],
+
+        [[0.0181, 0.0178, 0.0240,  ..., 0.0189, 0.4453, 0.0273],
+         [0.0278, 0.0220, 0.0238,  ..., 0.0258, 0.2715, 0.0908],
+         [0.0202, 0.0223, 0.0252,  ..., 0.0282, 0.3398, 0.0880],
+         ...,
+         [0.0168, 0.0227, 0.0186,  ..., 0.0198, 0.5195, 0.0302],
+         [0.0253, 0.0374, 0.0285,  ..., 0.0317, 0.2188, 0.0417],
+         [0.0305, 0.0294, 0.0280,  ..., 0.0277, 0.2656, 0.0384]],
+
+        ...,
+
+        [[0.0076, 0.0047, 0.0055,  ..., 0.0068, 0.8203, 0.0083],
+         [0.0204, 0.0226, 0.0305,  ..., 0.0264, 0.2637, 0.0860],
+         [0.0184, 0.0244, 0.0195,  ..., 0.0217, 0.2500, 0.1779],
+         ...,
+         [0.0237, 0.0209, 0.0159,  ..., 0.0201, 0.4941, 0.0250],
+         [0.0166, 0.0162, 0.0175,  ..., 0.0185, 0.5469, 0.0182],
+         [0.0100, 0.0091, 0.0085,  ..., 0.0097, 0.7148, 0.0134]],
+
+        [[0.0163, 0.0147, 0.0155,  ..., 0.0174, 0.5352, 0.0201],
+         [0.0307, 0.0249, 0.0281,  ..., 0.0361, 0.0806, 0.1009],
+         [0.0293, 0.0242, 0.0353,  ..., 0.0370, 0.0942, 0.1164],
+         ...,
+         [0.0282, 0.0312, 0.0270,  ..., 0.0300, 0.1523, 0.0314],
+         [0.0169, 0.0178, 0.0256,  ..., 0.0224, 0.4375, 0.0254],
+         [0.0168, 0.0249, 0.0195,  ..., 0.0207, 0.4336, 0.0225]],
+
+        [[0.0230, 0.0193, 0.0197,  ..., 0.0291, 0.3359, 0.0295],
+         [0.0271, 0.0190, 0.0259,  ..., 0.0224, 0.2715, 0.0823],
+         [0.0225, 0.0264, 0.0195,  ..., 0.0287, 0.2969, 0.0794],
+         ...,
+         [0.0255, 0.0242, 0.0279,  ..., 0.0290, 0.2930, 0.0367],
+         [0.0275, 0.0221, 0.0237,  ..., 0.0205, 0.3145, 0.0304],
+         [0.0199, 0.0185, 0.0146,  ..., 0.0186, 0.4902, 0.0258]]],
+       device='cuda:0', grad_fn=<CopySlices>), 'router_probs_for_selection': tensor([[[ 0.0159,  0.0210,  0.0138,  ...,  0.0193, -1.0000,  0.0284],
+         [ 0.0245,  0.0307,  0.0309,  ...,  0.0319, -1.0000,  0.1089],
+         [ 0.0263,  0.0231,  0.0293,  ...,  0.0335, -1.0000,  0.1232],
+         ...,
+         [ 0.0195,  0.0227,  0.0241,  ...,  0.0225, -1.0000,  0.0190],
+         [ 0.0224,  0.0190,  0.0168,  ...,  0.0149, -1.0000,  0.0185],
+         [ 0.0168,  0.0157,  0.0168,  ...,  0.0150, -1.0000,  0.0148]],
+
+        [[ 0.0219,  0.0240,  0.0216,  ...,  0.0175, -1.0000,  0.0450],
+         [ 0.0173,  0.0175,  0.0212,  ...,  0.0424, -1.0000,  0.0982],
+         [ 0.0187,  0.0136,  0.0181,  ...,  0.0349, -1.0000,  0.1737],
+         ...,
+         [ 0.0070,  0.0094,  0.0083,  ...,  0.0078, -1.0000,  0.0139],
+         [ 0.0165,  0.0118,  0.0146,  ...,  0.0146, -1.0000,  0.0192],
+         [ 0.0129,  0.0130,  0.0115,  ...,  0.0104, -1.0000,  0.0124]],
+
+        [[ 0.0181,  0.0178,  0.0240,  ...,  0.0189, -1.0000,  0.0273],
+         [ 0.0278,  0.0220,  0.0238,  ...,  0.0258, -1.0000,  0.0908],
+         [ 0.0202,  0.0223,  0.0252,  ...,  0.0282, -1.0000,  0.0880],
+         ...,
+         [ 0.0168,  0.0227,  0.0186,  ...,  0.0198, -1.0000,  0.0302],
+         [ 0.0253,  0.0374,  0.0285,  ...,  0.0317, -1.0000,  0.0417],
+         [ 0.0305,  0.0294,  0.0280,  ...,  0.0277, -1.0000,  0.0384]],
+
+        ...,
+
+        [[ 0.0076,  0.0047,  0.0055,  ...,  0.0068, -1.0000,  0.0083],
+         [ 0.0204,  0.0226,  0.0305,  ...,  0.0264, -1.0000,  0.0860],
+         [ 0.0184,  0.0244,  0.0195,  ...,  0.0217, -1.0000,  0.1779],
+         ...,
+         [ 0.0237,  0.0209,  0.0159,  ...,  0.0201, -1.0000,  0.0250],
+         [ 0.0166,  0.0162,  0.0175,  ...,  0.0185, -1.0000,  0.0182],
+         [ 0.0100,  0.0091,  0.0085,  ...,  0.0097, -1.0000,  0.0134]],
+
+        [[ 0.0163,  0.0147,  0.0155,  ...,  0.0174, -1.0000,  0.0201],
+         [ 0.0307,  0.0249,  0.0281,  ...,  0.0361, -1.0000,  0.1009],
+         [ 0.0293,  0.0242,  0.0353,  ...,  0.0370, -1.0000,  0.1164],
+         ...,
+         [ 0.0282,  0.0312,  0.0270,  ...,  0.0300, -1.0000,  0.0314],
+         [ 0.0169,  0.0178,  0.0256,  ...,  0.0224, -1.0000,  0.0254],
+         [ 0.0168,  0.0249,  0.0195,  ...,  0.0207, -1.0000,  0.0225]],
+
+        [[ 0.0230,  0.0193,  0.0197,  ...,  0.0291, -1.0000,  0.0295],
+         [ 0.0271,  0.0190,  0.0259,  ...,  0.0224, -1.0000,  0.0823],
+         [ 0.0225,  0.0264,  0.0195,  ...,  0.0287, -1.0000,  0.0794],
+         ...,
+         [ 0.0255,  0.0242,  0.0279,  ...,  0.0290, -1.0000,  0.0367],
+         [ 0.0275,  0.0221,  0.0237,  ...,  0.0205, -1.0000,  0.0304],
+         [ 0.0199,  0.0185,  0.0146,  ...,  0.0186, -1.0000,  0.0258]]],
+       device='cuda:0', grad_fn=<CopySlices>), 'reserve_layer_prob': tensor([[0.5508, 0.2080, 0.2236,  ..., 0.3867, 0.5742, 0.6133],
+        [0.4492, 0.2852, 0.2871,  ..., 0.7539, 0.5898, 0.7070],
+        [0.4453, 0.2715, 0.3398,  ..., 0.5195, 0.2188, 0.2656],
+        ...,
+        [0.8203, 0.2637, 0.2500,  ..., 0.4941, 0.5469, 0.7148],
+        [0.5352, 0.0806, 0.0942,  ..., 0.1523, 0.4375, 0.4336],
+        [0.3359, 0.2715, 0.2969,  ..., 0.2930, 0.3145, 0.4902]],
+       device='cuda:0', grad_fn=<SelectBackward0>)}
+
+ ======== router_probs.min() 0.0 and max():  1.0
+router_probs_for_selection.min() -1.0 and max():  0.261013925075531
+reserve_layer_prob.min() 0.00830078125 and max():  1.0
+after selecting vision features, reserve_layer_prob.min() 0.00830078125 and max():  1.0
+selection_probs.min() 0.0 and max():  0.261013925075531
+soft_proxy.min() 0.0 and max():  0.3714515268802643
+patch_weight.min() 0.0 and max():  0.99169921875
+density_1.min() 0.010170872323215008 and max():  0.3895081579685211
+density_1_proxy.min() 0.0363050177693367 and max():  0.049300603568553925
+=================================== END COMPUTE LOAD BALANCE LOSS ===================================
+
+Using cached router probs for clip, load balance loss: 1.106781005859375
+------------------------ END ONE STEP ------------------------
+the gradients of the models is {'model.mm_projector.0.weight': tensor(12.0677, device='cuda:0'), 'model.mm_projector.0.bias': tensor(0.3620, device='cuda:0'), 'model.mm_projector.2.weight': tensor(35.2330, device='cuda:0'), 'model.mm_projector.2.bias': tensor(1.1601, device='cuda:0'), 'router_clip._weight_fn.weights': tensor(0., device='cuda:0'), 'router_clip.reserve_gate.weight': tensor(nan, device='cuda:0'), 'router_clip.reserve_gate.bias': tensor(nan, device='cuda:0'), 'router_clip.text_attn_q.weight': tensor(nan, device='cuda:0'), 'router_clip.text_attn_q.bias': tensor(nan, device='cuda:0'), 'router_clip.text_attn_k.weight': tensor(nan, device='cuda:0'), 'router_clip.text_attn_k.bias': tensor(nan, device='cuda:0')}
+==================================================
+
+ Using text conditioned routing...
+ 
+ ================== I AM IN ROUTER ENCODE IMAGES WITH CLIP  using encoder siglip! ==================
+
+ calculating forward using patch_layer branch...
+
+ ====== q.min() tensor(-1.6172, device='cuda:0', dtype=torch.bfloat16, grad_fn=<MinBackward1>) q.max() tensor(1.6875, device='cuda:0', dtype=torch.bfloat16, grad_fn=<MaxBackward1>)
+
+ ====== k.min() tensor(-28.8750, device='cuda:0', dtype=torch.bfloat16, grad_fn=<MinBackward1>) k.max() tensor(26.8750, device='cuda:0', dtype=torch.bfloat16, grad_fn=<MaxBackward1>)
+
+ ====== scores.min() tensor(-2.8125, device='cuda:0', dtype=torch.bfloat16, grad_fn=<MinBackward1>) scores.max() tensor(5.2812, device='cuda:0', dtype=torch.bfloat16, grad_fn=<MaxBackward1>)
+
+ ====== scores AFTER noise min() tensor(-2.5896, device='cuda:0', grad_fn=<MinBackward1>) scores.max() tensor(5.9216, device='cuda:0', grad_fn=<MaxBackward1>)
+
+ ====== gate_logits.min() tensor(-4.4688, device='cuda:0', dtype=torch.bfloat16, grad_fn=<MinBackward1>) gate_logits.max() tensor(5.4688, device='cuda:0', dtype=torch.bfloat16, grad_fn=<MaxBackward1>)
+
+ ====== router_probs.min() tensor(0.0001, device='cuda:0', grad_fn=<MinBackward1>) router_probs.max() tensor(0.9961, device='cuda:0', grad_fn=<MaxBackward1>)
+
+ ======= router_probs_for_selection.min() tensor(-1., device='cuda:0', grad_fn=<MinBackward1>) router_probs_for_selection.max() tensor(0.2691, device='cuda:0', grad_fn=<MaxBackward1>)
+
+ ======= reserve_layer_prob.min() tensor(0.0114, device='cuda:0', grad_fn=<MinBackward1>) reserve_layer_prob.max() tensor(0.9961, device='cuda:0', grad_fn=<MaxBackward1>)
+
+ ================================================
+
+ k: 1
+
+ router_probs_for_selection min  tensor(-1., device='cuda:0', grad_fn=<MinBackward1>) max tensor(0.2691, device='cuda:0', grad_fn=<MaxBackward1>)
+
+ getting patch_layer_and_scaling_probs with forced reserve layer...
+
+ remaining_mass min  tensor(0.0039, device='cuda:0', grad_fn=<MinBackward1>) max tensor(0.9886, device='cuda:0', grad_fn=<MaxBackward1>)
+
+ probs_sum min  tensor(0.0002, device='cuda:0', grad_fn=<MinBackward1>) max tensor(0.2691, device='cuda:0', grad_fn=<MaxBackward1>)
+
+ scale min  tensor(2.7721, device='cuda:0', grad_fn=<MinBackward1>) max  tensor(22.8066, device='cuda:0', grad_fn=<MaxBackward1>)
+
+ =================================================
+
+ ================ main loss: 7.8637
+
+ calculating aux_loss
+
+ calculating patch layer load balancing loss...
+aux_payload :  {'kind': 'patch_layer', 'router_probs': tensor([[[0.0226, 0.0219, 0.0264,  ..., 0.0261, 0.3594, 0.0406],
+         [0.0268, 0.0210, 0.0291,  ..., 0.0273, 0.2695, 0.0480],
+         [0.0186, 0.0231, 0.0263,  ..., 0.0310, 0.3184, 0.0605],
+         ...,
+         [0.0225, 0.0244, 0.0204,  ..., 0.0261, 0.3047, 0.0299],
+         [0.0172, 0.0134, 0.0214,  ..., 0.0257, 0.5195, 0.0256],
+         [0.0230, 0.0314, 0.0347,  ..., 0.0315, 0.2334, 0.0332]],
+
+        [[0.0207, 0.0205, 0.0143,  ..., 0.0153, 0.5664, 0.0173],
+         [0.0297, 0.0310, 0.0253,  ..., 0.0441, 0.1982, 0.0576],
+         [0.0305, 0.0250, 0.0291,  ..., 0.0422, 0.2188, 0.0872],
+         ...,
+         [0.0137, 0.0178, 0.0165,  ..., 0.0164, 0.5547, 0.0214],
+         [0.0232, 0.0181, 0.0192,  ..., 0.0256, 0.4609, 0.0280],
+         [0.0157, 0.0192, 0.0188,  ..., 0.0213, 0.4258, 0.0336]],
+
+        [[0.0270, 0.0248, 0.0241,  ..., 0.0177, 0.3398, 0.0370],
+         [0.0244, 0.0258, 0.0393,  ..., 0.0322, 0.0574, 0.0909],
+         [0.0262, 0.0237, 0.0377,  ..., 0.0400, 0.0654, 0.1029],
+         ...,
+         [0.0253, 0.0230, 0.0230,  ..., 0.0311, 0.2852, 0.0452],
+         [0.0246, 0.0199, 0.0268,  ..., 0.0242, 0.2715, 0.0319],
+         [0.0246, 0.0198, 0.0254,  ..., 0.0205, 0.2773, 0.0387]],
+
+        ...,
+
+        [[0.0212, 0.0141, 0.0164,  ..., 0.0178, 0.5586, 0.0214],
+         [0.0283, 0.0172, 0.0239,  ..., 0.0290, 0.3633, 0.0419],
+         [0.0157, 0.0194, 0.0174,  ..., 0.0269, 0.4492, 0.0534],
+         ...,
+         [0.0339, 0.0225, 0.0225,  ..., 0.0192, 0.3691, 0.0261],
+         [0.0176, 0.0212, 0.0176,  ..., 0.0236, 0.5117, 0.0224],
+         [0.0065, 0.0067, 0.0071,  ..., 0.0109, 0.8086, 0.0073]],
+
+        [[0.0132, 0.0130, 0.0162,  ..., 0.0130, 0.5703, 0.0356],
+         [0.0228, 0.0307, 0.0283,  ..., 0.0371, 0.1885, 0.0988],
+         [0.0315, 0.0228, 0.0352,  ..., 0.0306, 0.1992, 0.0745],
+         ...,
+         [0.0185, 0.0142, 0.0163,  ..., 0.0182, 0.5469, 0.0192],
+         [0.0138, 0.0170, 0.0203,  ..., 0.0203, 0.4980, 0.0361],
+         [0.0130, 0.0139, 0.0139,  ..., 0.0176, 0.5430, 0.0343]],
+
+        [[0.0043, 0.0051, 0.0058,  ..., 0.0048, 0.8672, 0.0042],
+         [0.0019, 0.0017, 0.0017,  ..., 0.0018, 0.9531, 0.0016],
+         [0.0292, 0.0241, 0.0256,  ..., 0.0325, 0.1826, 0.1246],
+         ...,
+         [0.0285, 0.0202, 0.0287,  ..., 0.0240, 0.3711, 0.0195],
+         [0.0215, 0.0210, 0.0150,  ..., 0.0184, 0.5273, 0.0176],
+         [0.0166, 0.0217, 0.0155,  ..., 0.0258, 0.4609, 0.0203]]],
+       device='cuda:0', grad_fn=<CopySlices>), 'router_probs_for_selection': tensor([[[ 0.0226,  0.0219,  0.0264,  ...,  0.0261, -1.0000,  0.0406],
+         [ 0.0268,  0.0210,  0.0291,  ...,  0.0273, -1.0000,  0.0480],
+         [ 0.0186,  0.0231,  0.0263,  ...,  0.0310, -1.0000,  0.0605],
+         ...,
+         [ 0.0225,  0.0244,  0.0204,  ...,  0.0261, -1.0000,  0.0299],
+         [ 0.0172,  0.0134,  0.0214,  ...,  0.0257, -1.0000,  0.0256],
+         [ 0.0230,  0.0314,  0.0347,  ...,  0.0315, -1.0000,  0.0332]],
+
+        [[ 0.0207,  0.0205,  0.0143,  ...,  0.0153, -1.0000,  0.0173],
+         [ 0.0297,  0.0310,  0.0253,  ...,  0.0441, -1.0000,  0.0576],
+         [ 0.0305,  0.0250,  0.0291,  ...,  0.0422, -1.0000,  0.0872],
+         ...,
+         [ 0.0137,  0.0178,  0.0165,  ...,  0.0164, -1.0000,  0.0214],
+         [ 0.0232,  0.0181,  0.0192,  ...,  0.0256, -1.0000,  0.0280],
+         [ 0.0157,  0.0192,  0.0188,  ...,  0.0213, -1.0000,  0.0336]],
+
+        [[ 0.0270,  0.0248,  0.0241,  ...,  0.0177, -1.0000,  0.0370],
+         [ 0.0244,  0.0258,  0.0393,  ...,  0.0322, -1.0000,  0.0909],
+         [ 0.0262,  0.0237,  0.0377,  ...,  0.0400, -1.0000,  0.1029],
+         ...,
+         [ 0.0253,  0.0230,  0.0230,  ...,  0.0311, -1.0000,  0.0452],
+         [ 0.0246,  0.0199,  0.0268,  ...,  0.0242, -1.0000,  0.0319],
+         [ 0.0246,  0.0198,  0.0254,  ...,  0.0205, -1.0000,  0.0387]],
+
+        ...,
+
+        [[ 0.0212,  0.0141,  0.0164,  ...,  0.0178, -1.0000,  0.0214],
+         [ 0.0283,  0.0172,  0.0239,  ...,  0.0290, -1.0000,  0.0419],
+         [ 0.0157,  0.0194,  0.0174,  ...,  0.0269, -1.0000,  0.0534],
+         ...,
+         [ 0.0339,  0.0225,  0.0225,  ...,  0.0192, -1.0000,  0.0261],
+         [ 0.0176,  0.0212,  0.0176,  ...,  0.0236, -1.0000,  0.0224],
+         [ 0.0065,  0.0067,  0.0071,  ...,  0.0109, -1.0000,  0.0073]],
+
+        [[ 0.0132,  0.0130,  0.0162,  ...,  0.0130, -1.0000,  0.0356],
+         [ 0.0228,  0.0307,  0.0283,  ...,  0.0371, -1.0000,  0.0988],
+         [ 0.0315,  0.0228,  0.0352,  ...,  0.0306, -1.0000,  0.0745],
+         ...,
+         [ 0.0185,  0.0142,  0.0163,  ...,  0.0182, -1.0000,  0.0192],
+         [ 0.0138,  0.0170,  0.0203,  ...,  0.0203, -1.0000,  0.0361],
+         [ 0.0130,  0.0139,  0.0139,  ...,  0.0176, -1.0000,  0.0343]],
+
+        [[ 0.0043,  0.0051,  0.0058,  ...,  0.0048, -1.0000,  0.0042],
+         [ 0.0019,  0.0017,  0.0017,  ...,  0.0018, -1.0000,  0.0016],
+         [ 0.0292,  0.0241,  0.0256,  ...,  0.0325, -1.0000,  0.1246],
+         ...,
+         [ 0.0285,  0.0202,  0.0287,  ...,  0.0240, -1.0000,  0.0195],
+         [ 0.0215,  0.0210,  0.0150,  ...,  0.0184, -1.0000,  0.0176],
+         [ 0.0166,  0.0217,  0.0155,  ...,  0.0258, -1.0000,  0.0203]]],
+       device='cuda:0', grad_fn=<CopySlices>), 'reserve_layer_prob': tensor([[0.3594, 0.2695, 0.3184,  ..., 0.3047, 0.5195, 0.2334],
+        [0.5664, 0.1982, 0.2188,  ..., 0.5547, 0.4609, 0.4258],
+        [0.3398, 0.0574, 0.0654,  ..., 0.2852, 0.2715, 0.2773],
+        ...,
+        [0.5586, 0.3633, 0.4492,  ..., 0.3691, 0.5117, 0.8086],
+        [0.5703, 0.1885, 0.1992,  ..., 0.5469, 0.4980, 0.5430],
+        [0.8672, 0.9531, 0.1826,  ..., 0.3711, 0.5273, 0.4609]],
+       device='cuda:0', grad_fn=<SelectBackward0>)}
+
+ ======== router_probs.min() 0.00011420165537856519 and max():  0.99609375
+router_probs_for_selection.min() -1.0 and max():  0.26914864778518677
+reserve_layer_prob.min() 0.0113525390625 and max():  0.99609375
+after selecting vision features, reserve_layer_prob.min() 0.0113525390625 and max():  0.99609375
+selection_probs.min() 0.00011420165537856519 and max():  0.26914864778518677
+soft_proxy.min() 0.009160253219306469 and max():  0.3607437312602997
+patch_weight.min() 0.00390625 and max():  0.9886474609375
+density_1.min() 0.010122152045369148 and max():  0.3497145473957062
+density_1_proxy.min() 0.036339279264211655 and max():  0.047993049025535583
+=================================== END COMPUTE LOAD BALANCE LOSS ===================================
+
+Using cached router probs for clip, load balance loss: 1.084617018699646
+------------------------ END ONE STEP ------------------------
+the gradients of the models is {'model.mm_projector.0.weight': tensor(25.4559, device='cuda:0'), 'model.mm_projector.0.bias': tensor(0.7471, device='cuda:0'), 'model.mm_projector.2.weight': tensor(75.1042, device='cuda:0'), 'model.mm_projector.2.bias': tensor(2.4165, device='cuda:0'), 'router_clip._weight_fn.weights': tensor(0., device='cuda:0'), 'router_clip.reserve_gate.weight': tensor(nan, device='cuda:0'), 'router_clip.reserve_gate.bias': tensor(nan, device='cuda:0'), 'router_clip.text_attn_q.weight': tensor(nan, device='cuda:0'), 'router_clip.text_attn_q.bias': tensor(nan, device='cuda:0'), 'router_clip.text_attn_k.weight': tensor(nan, device='cuda:0'), 'router_clip.text_attn_k.bias': tensor(nan, device='cuda:0')}
+==================================================
+{'loss': 7.7915, 'grad_norm': nan, 'learning_rate': 5.725190839694656e-07, 'epoch': 0.0}
+
+ Using text conditioned routing...
+ 
+ ================== I AM IN ROUTER ENCODE IMAGES WITH CLIP  using encoder siglip! ==================
+
+ calculating forward using patch_layer branch...
+
+ ====== q.min() tensor(nan, device='cuda:0', dtype=torch.bfloat16, grad_fn=<MinBackward1>) q.max() tensor(nan, device='cuda:0', dtype=torch.bfloat16, grad_fn=<MaxBackward1>)
+
+ ====== k.min() tensor(nan, device='cuda:0', dtype=torch.bfloat16, grad_fn=<MinBackward1>) k.max() tensor(nan, device='cuda:0', dtype=torch.bfloat16, grad_fn=<MaxBackward1>)
+
+ ====== scores.min() tensor(nan, device='cuda:0', dtype=torch.bfloat16, grad_fn=<MinBackward1>) scores.max() tensor(nan, device='cuda:0', dtype=torch.bfloat16, grad_fn=<MaxBackward1>)
+
+ ====== scores AFTER noise min() tensor(nan, device='cuda:0', grad_fn=<MinBackward1>) scores.max() tensor(nan, device='cuda:0', grad_fn=<MaxBackward1>)
+
+ ====== gate_logits.min() tensor(nan, device='cuda:0', dtype=torch.bfloat16, grad_fn=<MinBackward1>) gate_logits.max() tensor(nan, device='cuda:0', dtype=torch.bfloat16, grad_fn=<MaxBackward1>)
+
+ ====== router_probs.min() tensor(nan, device='cuda:0', grad_fn=<MinBackward1>) router_probs.max() tensor(nan, device='cuda:0', grad_fn=<MaxBackward1>)
+
+ ======= router_probs_for_selection.min() tensor(nan, device='cuda:0', grad_fn=<MinBackward1>) router_probs_for_selection.max() tensor(nan, device='cuda:0', grad_fn=<MaxBackward1>)
+
+ ======= reserve_layer_prob.min() tensor(nan, device='cuda:0', grad_fn=<MinBackward1>) reserve_layer_prob.max() tensor(nan, device='cuda:0', grad_fn=<MaxBackward1>)
+
+ ================================================
+
+ k: 1
+
+ router_probs_for_selection min  tensor(nan, device='cuda:0', grad_fn=<MinBackward1>) max tensor(nan, device='cuda:0', grad_fn=<MaxBackward1>)
+
+ getting patch_layer_and_scaling_probs with forced reserve layer...
+
+ remaining_mass min  tensor(nan, device='cuda:0', grad_fn=<MinBackward1>) max tensor(nan, device='cuda:0', grad_fn=<MaxBackward1>)
+
+ probs_sum min  tensor(nan, device='cuda:0', grad_fn=<MinBackward1>) max tensor(nan, device='cuda:0', grad_fn=<MaxBackward1>)
+
+ scale min  tensor(0., device='cuda:0', grad_fn=<MinBackward1>) max  tensor(0., device='cuda:0', grad_fn=<MaxBackward1>)
+
+ =================================================
+
+ ================ main loss: nan
+
+ calculating aux_loss
+
+ calculating patch layer load balancing loss...
+aux_payload :  {'kind': 'patch_layer', 'router_probs': tensor([[[nan, nan, nan,  ..., nan, nan, nan],
+         [nan, nan, nan,  ..., nan, nan, nan],
+         [nan, nan, nan,  ..., nan, nan, nan],
+         ...,
+         [nan, nan, nan,  ..., nan, nan, nan],
+         [nan, nan, nan,  ..., nan, nan, nan],
+         [nan, nan, nan,  ..., nan, nan, nan]],
+
+        [[nan, nan, nan,  ..., nan, nan, nan],
+         [nan, nan, nan,  ..., nan, nan, nan],
+         [nan, nan, nan,  ..., nan, nan, nan],
+         ...,
+         [nan, nan, nan,  ..., nan, nan, nan],
+         [nan, nan, nan,  ..., nan, nan, nan],
+         [nan, nan, nan,  ..., nan, nan, nan]],
+
+        [[nan, nan, nan,  ..., nan, nan, nan],
+         [nan, nan, nan,  ..., nan, nan, nan],
+         [nan, nan, nan,  ..., nan, nan, nan],
+         ...,
+         [nan, nan, nan,  ..., nan, nan, nan],
+         [nan, nan, nan,  ..., nan, nan, nan],
+         [nan, nan, nan,  ..., nan, nan, nan]],
+
+        ...,
+
+        [[nan, nan, nan,  ..., nan, nan, nan],
+         [nan, nan, nan,  ..., nan, nan, nan],
+         [nan, nan, nan,  ..., nan, nan, nan],
+         ...,
+         [nan, nan, nan,  ..., nan, nan, nan],
+         [nan, nan, nan,  ..., nan, nan, nan],
+         [nan, nan, nan,  ..., nan, nan, nan]],
+
+        [[nan, nan, nan,  ..., nan, nan, nan],
+         [nan, nan, nan,  ..., nan, nan, nan],
+         [nan, nan, nan,  ..., nan, nan, nan],
+         ...,
+         [nan, nan, nan,  ..., nan, nan, nan],
+         [nan, nan, nan,  ..., nan, nan, nan],
+         [nan, nan, nan,  ..., nan, nan, nan]],
+
+        [[nan, nan, nan,  ..., nan, nan, nan],
+         [nan, nan, nan,  ..., nan, nan, nan],
+         [nan, nan, nan,  ..., nan, nan, nan],
+         ...,
+         [nan, nan, nan,  ..., nan, nan, nan],
+         [nan, nan, nan,  ..., nan, nan, nan],
+         [nan, nan, nan,  ..., nan, nan, nan]]], device='cuda:0',
+       grad_fn=<CopySlices>), 'router_probs_for_selection': tensor([[[nan, nan, nan,  ..., nan, -1., nan],
+         [nan, nan, nan,  ..., nan, -1., nan],
+         [nan, nan, nan,  ..., nan, -1., nan],
+         ...,
+         [nan, nan, nan,  ..., nan, -1., nan],
+         [nan, nan, nan,  ..., nan, -1., nan],
+         [nan, nan, nan,  ..., nan, -1., nan]],
+
+        [[nan, nan, nan,  ..., nan, -1., nan],
+         [nan, nan, nan,  ..., nan, -1., nan],
+         [nan, nan, nan,  ..., nan, -1., nan],
+         ...,
+         [nan, nan, nan,  ..., nan, -1., nan],
+         [nan, nan, nan,  ..., nan, -1., nan],
+         [nan, nan, nan,  ..., nan, -1., nan]],
+
+        [[nan, nan, nan,  ..., nan, -1., nan],
+         [nan, nan, nan,  ..., nan, -1., nan],
+         [nan, nan, nan,  ..., nan, -1., nan],
+         ...,
+         [nan, nan, nan,  ..., nan, -1., nan],
+         [nan, nan, nan,  ..., nan, -1., nan],
+         [nan, nan, nan,  ..., nan, -1., nan]],
+
+        ...,
+
+        [[nan, nan, nan,  ..., nan, -1., nan],
+         [nan, nan, nan,  ..., nan, -1., nan],
+         [nan, nan, nan,  ..., nan, -1., nan],
+         ...,
+         [nan, nan, nan,  ..., nan, -1., nan],
+         [nan, nan, nan,  ..., nan, -1., nan],
+         [nan, nan, nan,  ..., nan, -1., nan]],
+
+        [[nan, nan, nan,  ..., nan, -1., nan],
+         [nan, nan, nan,  ..., nan, -1., nan],
+         [nan, nan, nan,  ..., nan, -1., nan],
+         ...,
+         [nan, nan, nan,  ..., nan, -1., nan],
+         [nan, nan, nan,  ..., nan, -1., nan],
+         [nan, nan, nan,  ..., nan, -1., nan]],
+
+        [[nan, nan, nan,  ..., nan, -1., nan],
+         [nan, nan, nan,  ..., nan, -1., nan],
+         [nan, nan, nan,  ..., nan, -1., nan],
+         ...,
+         [nan, nan, nan,  ..., nan, -1., nan],
+         [nan, nan, nan,  ..., nan, -1., nan],
+         [nan, nan, nan,  ..., nan, -1., nan]]], device='cuda:0',
+       grad_fn=<CopySlices>), 'reserve_layer_prob': tensor([[nan, nan, nan,  ..., nan, nan, nan],
+        [nan, nan, nan,  ..., nan, nan, nan],
+        [nan, nan, nan,  ..., nan, nan, nan],
+        ...,
+        [nan, nan, nan,  ..., nan, nan, nan],
+        [nan, nan, nan,  ..., nan, nan, nan],
+        [nan, nan, nan,  ..., nan, nan, nan]], device='cuda:0',
+       grad_fn=<SelectBackward0>)}
+
+ ======== router_probs.min() nan and max():  nan
+router_probs_for_selection.min() nan and max():  nan
+reserve_layer_prob.min() nan and max():  nan
+after selecting vision features, reserve_layer_prob.min() nan and max():  nan
+selection_probs.min() nan and max():  nan
+soft_proxy.min() 0.0 and max():  0.0
+patch_weight.min() nan and max():  nan
+density_1.min() nan and max():  nan
+density_1_proxy.min() nan and max():  nan
+=================================== END COMPUTE LOAD BALANCE LOSS ===================================
+
+Using cached router probs for clip, load balance loss: nan
+------------------------ END ONE STEP ------------------------
+[1;34mwandb[0m: 
+[1;34mwandb[0m: 🚀 View run [33m/shared/nas2/sstoica2/MoL/checkpoints/llava-v1.5-13b-moe-pretrain_2e-4_text-cond-attn-token-router_pretrain_siglip_update_code[0m at: [34m[0m
+[1;34mwandb[0m: Find logs at: [1;35mwandb/run-20260404_202438-5gpjxrfx/logs[0m
+[2026-04-04 20:25:28,384] [INFO] [launch.py:319:sigkill_handler] Killing subprocess 1091992
+[2026-04-04 20:25:28,385] [ERROR] [launch.py:325:sigkill_handler] ['/shared/nas/data/m1/sstoica2/conda/envs/j_llava_inc_transformers/bin/python', '-u', '/shared/nas2/sstoica2/MoL/llava/train/train_mem_router.py', '--local_rank=0', '--deepspeed', '/shared/nas2/sstoica2/MoL/scripts/zero2.json', '--model_name_or_path', 'lmsys/vicuna-13b-v1.5', '--version', 'plain', '--data_path', '/shared/nas/data/m1/sstoica2/.cache/huggingface/.cache/huggingface/datasets--Blip/blip_laion_cc_sbu_558k.json', '--image_folder', '/shared/nas/data/m1/sstoica2/.cache/huggingface/.cache/huggingface/datasets--Blip/images', '--vision_tower', 'google/siglip-so400m-patch14-384', '--mm_projector_type', 'mlp2x_gelu', '--tune_mm_mlp_adapter', 'True', '--tune_residual_scaling_coef', 'False', '--freeze_backbone', 'True', '--mm_vision_select_layer', '-2', '--num_layers_to_choose', '1', '--mm_use_im_start_end', 'False', '--mm_use_im_patch_token', 'False', '--mm_use_text_enc', 'True', '--use_text_conditioned_router', 'True', '--text_conditioning', 'attention', '--text_attention_type', 'qk', '--text_attention_dim', '1024', '--attn_level', 'patch_layer', '--use_text_only_gating', 'False', '--text_pool', 'mean', '--text_scale', '1.0', '--bf16', 'True', '--output_dir', '/shared/nas2/sstoica2/MoL/checkpoints/llava-v1.5-13b-moe-pretrain_2e-4_text-cond-attn-token-router_pretrain_siglip_update_code', '--num_train_epochs', '1', '--per_device_train_batch_size', '32', '--per_device_eval_batch_size', '4', '--gradient_accumulation_steps', '2', '--evaluation_strategy', 'no', '--save_strategy', 'steps', '--save_steps', '456', '--save_total_limit', '100', '--mm_projector_lr', '1e-3', '--router_lr', '1e-5', '--weight_decay', '0.', '--warmup_ratio', '0.03', '--lr_scheduler_type', 'cosine', '--logging_steps', '1', '--tf32', 'True', '--model_max_length', '2048', '--gradient_checkpointing', 'True', '--dataloader_num_workers', '4', '--lazy_preprocess', 'True', '--force_reserve_layer', 'True', '--reserve_layer', '-2', '--learnable_gate', 'True', '--confidence_gate', 'False', '--confidence_gate_threshold', '0.6', '--confidence_gate_slope', '10.0', '--save_router_stats', 'True', '--save_steps_router_stats', '5', '--report_to', 'wandb', '--encoder_type', 'siglip'] exits with return code = 1
+ok

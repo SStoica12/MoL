@@ -12,7 +12,7 @@ MAX_NEW_TOKENS="${MAX_NEW_TOKENS:-16}"
 # Optional batch mode:
 # Paste checkpoint directories here to evaluate multiple models in one run.
 # If non-empty, this list takes precedence over --model-path / MODEL_PATH.
-CHECKPOINT_ROOT="/shared/nas2/jk100/MoL/checkpoints"
+CHECKPOINT_ROOT="/shared/nas2/sstoica2/MoL/checkpoints"
 MODEL_PATHS=(
     # "liuhaotian/llava-v1.5-13b"
     # "${CHECKPOINT_ROOT}/llava-v1.5-13b-moe-finetune_2e-4_router_learnable-gate_scaled-residual"
@@ -24,7 +24,7 @@ MODEL_PATHS=(
     # "${CHECKPOINT_ROOT}/llava-v1.5-13b-moe-finetune_text-cond-attn-patchlayer-router_learnable-gate_lr1e-5-pretrain_lr2e-5-finetune_k4"
     # "${CHECKPOINT_ROOT}/llava-v1.5-13b-moe-finetune_text-cond-attn-patchlayer-router_learnable-gate_lr1e-5-pretrain_lr2e-5-finetune_k6"
     # "${CHECKPOINT_ROOT}/llava-v1.5-13b-moe-finetune_text-cond-attn-patchlayer-router_learnable-gate_lr1e-5-pretrain_lr2e-5-finetune_no-delta",
-    /shared/nas2/sstoica2/MoL/checkpoints/llava-v1.5-13b-moe-finetune_2e-4_text-cond-attn-token-router_learnable-gate_dino_patch_layer
+    "${CHECKPOINT_ROOT}/llava-v1.5-13b-moe-finetune_2e-4_text-cond-attn-token-router_learnable-gate_dino_patch_layer_corrected_k=2"
 )
 
 BENCHMARK_DIR="/shared/nas2/jk100/MoL/playground/data/eval/HallusionBench"
@@ -140,10 +140,12 @@ run_eval_for_model() {
         --max_new_tokens "${MAX_NEW_TOKENS}" \
         --conv-mode "${CONV_MODE}" \
         --benchmark hallusionbench \
-        --use_route True \
+        --mm_use_text_enc \
+        --use_router True \
         --force_reserve_layer True \
         --attn_level "patch_layer" \
         --mm_use_text_enc \
+        --num_layers_to_choose 2 \
 
 
     python llava/eval/eval_hallusionbench.py \

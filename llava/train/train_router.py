@@ -947,7 +947,7 @@ class LazySupervisedDataset(Dataset):
             image_file = self.list_data_dict[i]['image']
             image_folder = self.data_args.image_folder
             # print("self.for_model : ", self.for_model)
-            if self.for_model == "clip" or self.load_model == "siglip":
+            if self.for_model == "clip" or self.for_model == "siglip":
                 processor = self.data_args.image_processor_clip # need to know when to process for dino and when to process for clip
             else:
                 processor = self.data_args.image_processor_dino
@@ -992,7 +992,7 @@ class LazySupervisedDataset(Dataset):
             data_dict['image'] = image
         elif self.data_args.is_multimodal:
             # image does not exist in the data, but the model is multimodal
-            if self.for_model == "clip" or self.load_model == "siglip":
+            if self.for_model == "clip" or self.for_model == "siglip":
                 processor = self.data_args.image_processor_clip # need to know when to process for dino and when to process for clip
                 crop_size = processor.crop_size
                 data_dict['image'] = torch.zeros(3, crop_size['height'], crop_size['width'])
@@ -1083,7 +1083,7 @@ def make_supervised_data_module(tokenizer: transformers.PreTrainedTokenizer,
 
 def train(attn_implementation=None):
     global local_rank
-    print("====================== SUCCESSFULLY IN MOL TRAINER ROUTER ======================")
+    rank0_print("====================== SUCCESSFULLY IN MOL TRAINER ROUTER ======================")
     parser = transformers.HfArgumentParser(
         (ModelArguments, DataArguments, TrainingArguments))
     model_args, data_args, training_args = parser.parse_args_into_dataclasses()
@@ -1160,6 +1160,7 @@ def train(attn_implementation=None):
         model = transformers.LlamaForCausalLM.from_pretrained(
             pretrained_model_name_or_pat=model_args.model_name_or_path,
             cache_dir=training_args.cache_dir,
+            config=config,
             attn_implementation=attn_implementation,
             torch_dtype=(torch.bfloat16 if training_args.bf16 else None),
             **bnb_model_from_pretrained_args
@@ -1289,16 +1290,17 @@ def train(attn_implementation=None):
             image_size = dino_tower.config.image_size
             patch_size = dino_tower.config.patch_size
             hidden_size = dino_tower.config.hidden_size_dino
-            num_image_tokens = (image_size // patch_size)**2 + 1 # 257 even for dino txt, which has 4 registers
-            router_dino_weights = torch.zeros((num_image_tokens, hidden_size)).to(dtype=torch.bfloat16 if training_args.bf16 else torch.float16, device=training_args.device)
+            num_image_tokens = (image_size // patch_size)**2 # we remove cls token
+            router_dino_weights = torch.zeros((num_image_tokens, hidden_size)).to(dtype=torch.bfloat16 if training_args.bf16 else torch.float16, device=training_args.device) # torch.Size([256, 1024])
         if vision_tower is not None:
             image_size = vision_tower.vision_tower.config.image_size
             patch_size = vision_tower.vision_tower.config.patch_size
             hidden_size = vision_tower.vision_tower.config.hidden_size
             num_image_tokens = (image_size // patch_size)**2 
             if model_args.encoder_type == "clip":
-                num_image_tokens += 1# 257 even for dino txt, which has 4 registers
-            router_clip_weights = torch.zeros((num_image_tokens, hidden_size)).to(dtype=torch.bfloat16 if training_args.bf16 else torch.float16, device=training_args.device)
+                num_image_tokens += 1 # 257 even for dino txt, which has 4 registers
+            router_clip_weights = torch.zeros((num_image_tokens, hidden_size)).to(dtype=torch.bfloat16 if training_args.bf16 else torch.float16, device=training_args.device) #torch.Size([577, 1024])
+        # import pdb; pdb.set_trace()
         # router_weights = None
         # print("model.config.mm_vision_select_feature: ", model.config.mm_vision_select_feature) # patch
         if not hasattr(model.config, 'mm_vision_select_feature'):
@@ -1422,7 +1424,7 @@ def train(attn_implementation=None):
             if model.router_clip.learnable_gate and model.router_clip.reserve_gate is None:
                 model.router_clip.reserve_gate = torch.nn.Linear(hidden_size, 1).to(device=training_args.device)
             model.router_clip.requires_grad_(True) # we need to learn the router
-        
+        # import pdb; pdb.set_trace()
         if "dino" in model_args.encoder_type:
             model.router_dino.num_layers_to_choose = model_args.num_layers_to_choose
             model.router_dino.force_reserve_layer = model_args.force_reserve_layer

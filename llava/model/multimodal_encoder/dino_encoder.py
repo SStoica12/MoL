@@ -80,7 +80,7 @@ class DINOVisionTower(nn.Module):
             else:
                 self.config = DINOVisionConfig()
 
-    def load_model(self):
+    def load_model(self, device_map=None):
         # import pdb; pdb.set_trace()
         if self.vision_tower_name == "dinov2_base": # done. Seems to train ok?
             self.vision_tower = torch.hub.load('facebookresearch/dinov2', 'dinov2_vitl14')
@@ -103,20 +103,19 @@ class DINOVisionTower(nn.Module):
 
     def feature_select(self, image_forward_outs):
         # get_class_and_patch_tokens already removes the patch tokens
+        # import pdb; pdb.set_trace()
         image_features = image_forward_outs["x_prenorm"]
         if self.vision_tower_name == "dinov2_base":
             assert self.config.num_register_tokens == 0
         if self.select_feature == 'patch':
             if "txt" in self.vision_tower_name:
-                image_features = image_features[:, 1:]   # registers already stripped
+                image_features = image_features #[:, 1:]   # registers already stripped
             else:
                 image_features = image_features[:, 1 + self.config.num_register_tokens:]
         elif self.select_feature == 'cls_patch':
             image_features = image_features  # CLS + patches already correct for txt
         else:
             raise ValueError(f'Unexpected select feature: {self.select_feature}')
-        return image_features
-
         return image_features
 
     @torch.no_grad()
@@ -131,22 +130,25 @@ class DINOVisionTower(nn.Module):
                 if "txt" in self.vision_tower_name:
                     # https://github.com/facebookresearch/dinov2/blob/7b187bd4df8efce2cbcbbb67bd01532c19bf4c9c/dinov2/hub/text/vision_tower.py#L162
                     device = next(model.parameters()).device # for some reason images were on device 2 rather than the device the model parameters were on
-                    class_token, patch_tokens = model.get_class_and_patch_tokens(images.to(device=device)) # we can not do forward because it would pool the patch tokens, and llava projector expects all 257 patch tokens
-                    return {"x_prenorm" : torch.cat([class_token.unsqueeze(1), patch_tokens], dim=1)}, None # this should hopefully be ok?
+                    _, patch_tokens = model.get_class_and_patch_tokens(images.to(device=device)) # we can not do forward because it would pool the patch tokens, and llava projector expects all 257 patch tokens
+                    return {"x_prenorm" : patch_tokens}, None # this should hopefully be ok?
                 else:
                     return model.forward_features(imgs), None # forward_features is dict of dict_keys(['x_norm_clstoken', 'x_norm_regtokens', 'x_norm_patchtokens', 'x_prenorm', 'masks']). x_prenorm has shape torch.Size([32, 257 or 261, 1024])
-            
+            # import pdb; pdb.set_trace()
             hidden_states = []
             if "registers" in self.vision_tower_name or "txt" in self.vision_tower_name: # we need to remove the registers
                 if "registers" in self.vision_tower_name:
                     blocks = model.blocks
                     norm_layer = model.norm
                 elif "txt" in self.vision_tower_name:
+                    # we need to get the hidden states from the backbone, normalize them, and then feed them
+                    # thorugh the heads.
                     blocks = model.backbone.model.blocks
                     norm_layer = model.backbone.model.norm
                 def forward_hook(module, input, output):
                     output = norm_layer(output)
-                    output = torch.cat([output[:, 0, :].unsqueeze(1), output[:, 1+self.config.num_register_tokens:, :]], dim=1)
+                    # import pdb; pdb.set_trace()
+                    # output = output[:, 1+self.config.num_register_tokens:, :]
                     hidden_states.append(output)
                 hooks = [
                     block.register_forward_hook(forward_hook)
@@ -161,32 +163,17 @@ class DINOVisionTower(nn.Module):
             try:
                 if "txt" in self.vision_tower_name:
                     device = next(model.parameters()).device
-                    class_token, patch_tokens = model.get_class_and_patch_tokens(images.to(device=device)) # we can not do forward because it would pool the patch tokens
-                    out =  {"x_prenorm" : torch.cat([class_token.unsqueeze(1), patch_tokens], dim=1)}
+                    _, patch_tokens = model.get_class_and_patch_tokens(images.to(device=device)) # we can not do forward because it would pool the patch tokens
+                    out =  {"x_prenorm" : patch_tokens}
                 else:
                     out =  model.forward_features(imgs)
             
             finally:
                 for h in hooks:
                     h.remove()
-            # # purley for debugging. Will remove.
-            # # variance over the layers at each position <--- tells us how similar the hidden states
-            # # are. If they are very small, this means that we may need to make the zero initialization
-            # # of the router dino weights to be random instead.
-            # # import pdb; pdb.set_trace()
-            # hidden_states_cat = torch.stack(hidden_states)  # [L, B, N, H]
-            # var = torch.var(hidden_states_cat, dim=0) # [B, N, H] <- var over layers
-            # inter_layer_var = var.mean().item()  # scalar: avg variance across layers at each position
-            # rank0_print(f"[dino hidden] inter-layer variance: {inter_layer_var:.6f}")
-            
-            # # cosine similarity across the mean representation for each layer across the batch.
-            # # this is useful because it says how much each layer has diverged from the mean.
-            # # if it is a little bit, that means that they are all roughly the same and router 
-            # # dino weights should be initialized to random. 
-            # import torch.nn.functional as F
-            # mean_rep = hidden_states_cat.mean(dim=0, keepdim=True) # [1, B, N, H]
-            # cos_sims = F.cosine_similarity(hidden_states_cat.flatten(1), mean_rep.flatten(1), dim=-1) # L
-            # rank0_print(f"[dino cosine to mean] per-layer: {cos_sims.tolist()}")
+            # import pdb; pdb.set_trace()
+            hidden_states = [model.head(h) for h in hidden_states] # apply the head to each hidden state. This is important because the head has a projection and without it, the hidden states would be in a different space than the output features that the router dino uses.
+            hidden_states = [h[:, 1+self.config.num_register_tokens:, :] for h in hidden_states] # remove register tokens AFTER passing through head?
             return out, tuple(hidden_states)
         # import pdb; pdb.set_trace()
         backbone = self.vision_tower

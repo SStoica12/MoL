@@ -1,0 +1,67 @@
+[2026-04-04 20:29:15,113] [INFO] [real_accelerator.py:203:get_accelerator] Setting ds_accelerator to cuda (auto detect)
+Warning: The default cache directory for DeepSpeed Triton autotune, /home/sstoica2/.triton/autotune, appears to be on an NFS system. While this is generally acceptable, if you experience slowdowns or hanging when DeepSpeed exits, it is recommended to set the TRITON_CACHE_DIR environment variable to a non-NFS path.
+[93m [WARNING] [0m async_io requires the dev libaio .so object and headers but these were not found.
+[93m [WARNING] [0m async_io: please install the libaio-dev package with apt
+[93m [WARNING] [0m If libaio is already installed (perhaps from source), try setting the CFLAGS and LDFLAGS environment variables to where it can be found.
+[93m [WARNING] [0m Please specify the CUTLASS repo directory as environment variable $CUTLASS_PATH
+[93m [WARNING] [0m sparse_attn requires a torch version >= 1.5 and < 2.0 but detected 2.1
+[93m [WARNING] [0m using untested triton version (2.1.0), only 1.0.0 is known to be compatible
+[2026-04-04 20:29:18,365] [WARNING] [runner.py:202:fetch_hostfile] Unable to find hostfile, will proceed with training with local resources only.
+[2026-04-04 20:29:18,366] [INFO] [runner.py:568:main] cmd = /shared/nas/data/m1/sstoica2/conda/envs/j_llava_inc_transformers/bin/python -u -m deepspeed.launcher.launch --world_info=eyJsb2NhbGhvc3QiOiBbMl19 --master_addr=127.0.0.1 --master_port=29500 --enable_each_rank_log=None /shared/nas2/sstoica2/MoL/llava/train/train_mem_router.py --deepspeed /shared/nas2/sstoica2/MoL/scripts/zero2.json --model_name_or_path lmsys/vicuna-13b-v1.5 --version plain --data_path /shared/nas/data/m1/sstoica2/.cache/huggingface/.cache/huggingface/datasets--Blip/blip_laion_cc_sbu_558k.json --image_folder /shared/nas/data/m1/sstoica2/.cache/huggingface/.cache/huggingface/datasets--Blip/images --vision_tower google/siglip-so400m-patch14-384 --mm_projector_type mlp2x_gelu --tune_mm_mlp_adapter True --tune_residual_scaling_coef False --freeze_backbone True --mm_vision_select_layer -2 --num_layers_to_choose 1 --mm_use_im_start_end False --mm_use_im_patch_token False --mm_use_text_enc True --use_text_conditioned_router True --text_conditioning attention --text_attention_type qk --text_attention_dim 1024 --attn_level patch_layer --use_text_only_gating False --text_pool mean --text_scale 1.0 --bf16 True --output_dir /shared/nas2/sstoica2/MoL/checkpoints/llava-v1.5-13b-moe-pretrain_2e-4_text-cond-attn-token-router_pretrain_siglip_update_code --num_train_epochs 1 --per_device_train_batch_size 32 --per_device_eval_batch_size 4 --gradient_accumulation_steps 2 --evaluation_strategy no --save_strategy steps --save_steps 456 --save_total_limit 100 --mm_projector_lr 1e-3 --router_lr 1e-5 --weight_decay 0. --warmup_ratio 0.03 --lr_scheduler_type cosine --logging_steps 1 --tf32 True --model_max_length 2048 --gradient_checkpointing True --dataloader_num_workers 4 --lazy_preprocess True --force_reserve_layer True --reserve_layer -2 --learnable_gate True --confidence_gate False --confidence_gate_threshold 0.6 --confidence_gate_slope 10.0 --save_router_stats True --save_steps_router_stats 5 --report_to wandb --encoder_type siglip
+[2026-04-04 20:29:21,211] [INFO] [real_accelerator.py:203:get_accelerator] Setting ds_accelerator to cuda (auto detect)
+Warning: The default cache directory for DeepSpeed Triton autotune, /home/sstoica2/.triton/autotune, appears to be on an NFS system. While this is generally acceptable, if you experience slowdowns or hanging when DeepSpeed exits, it is recommended to set the TRITON_CACHE_DIR environment variable to a non-NFS path.
+[93m [WARNING] [0m async_io requires the dev libaio .so object and headers but these were not found.
+[93m [WARNING] [0m async_io: please install the libaio-dev package with apt
+[93m [WARNING] [0m If libaio is already installed (perhaps from source), try setting the CFLAGS and LDFLAGS environment variables to where it can be found.
+[93m [WARNING] [0m Please specify the CUTLASS repo directory as environment variable $CUTLASS_PATH
+[93m [WARNING] [0m sparse_attn requires a torch version >= 1.5 and < 2.0 but detected 2.1
+[93m [WARNING] [0m using untested triton version (2.1.0), only 1.0.0 is known to be compatible
+[2026-04-04 20:29:23,797] [INFO] [launch.py:146:main] WORLD INFO DICT: {'localhost': [2]}
+[2026-04-04 20:29:23,797] [INFO] [launch.py:152:main] nnodes=1, num_local_procs=1, node_rank=0
+[2026-04-04 20:29:23,797] [INFO] [launch.py:163:main] global_rank_mapping=defaultdict(<class 'list'>, {'localhost': [0]})
+[2026-04-04 20:29:23,797] [INFO] [launch.py:164:main] dist_world_size=1
+[2026-04-04 20:29:23,797] [INFO] [launch.py:168:main] Setting CUDA_VISIBLE_DEVICES=2
+[2026-04-04 20:29:23,799] [INFO] [launch.py:256:main] process 1111515 spawned with command: ['/shared/nas/data/m1/sstoica2/conda/envs/j_llava_inc_transformers/bin/python', '-u', '/shared/nas2/sstoica2/MoL/llava/train/train_mem_router.py', '--local_rank=0', '--deepspeed', '/shared/nas2/sstoica2/MoL/scripts/zero2.json', '--model_name_or_path', 'lmsys/vicuna-13b-v1.5', '--version', 'plain', '--data_path', '/shared/nas/data/m1/sstoica2/.cache/huggingface/.cache/huggingface/datasets--Blip/blip_laion_cc_sbu_558k.json', '--image_folder', '/shared/nas/data/m1/sstoica2/.cache/huggingface/.cache/huggingface/datasets--Blip/images', '--vision_tower', 'google/siglip-so400m-patch14-384', '--mm_projector_type', 'mlp2x_gelu', '--tune_mm_mlp_adapter', 'True', '--tune_residual_scaling_coef', 'False', '--freeze_backbone', 'True', '--mm_vision_select_layer', '-2', '--num_layers_to_choose', '1', '--mm_use_im_start_end', 'False', '--mm_use_im_patch_token', 'False', '--mm_use_text_enc', 'True', '--use_text_conditioned_router', 'True', '--text_conditioning', 'attention', '--text_attention_type', 'qk', '--text_attention_dim', '1024', '--attn_level', 'patch_layer', '--use_text_only_gating', 'False', '--text_pool', 'mean', '--text_scale', '1.0', '--bf16', 'True', '--output_dir', '/shared/nas2/sstoica2/MoL/checkpoints/llava-v1.5-13b-moe-pretrain_2e-4_text-cond-attn-token-router_pretrain_siglip_update_code', '--num_train_epochs', '1', '--per_device_train_batch_size', '32', '--per_device_eval_batch_size', '4', '--gradient_accumulation_steps', '2', '--evaluation_strategy', 'no', '--save_strategy', 'steps', '--save_steps', '456', '--save_total_limit', '100', '--mm_projector_lr', '1e-3', '--router_lr', '1e-5', '--weight_decay', '0.', '--warmup_ratio', '0.03', '--lr_scheduler_type', 'cosine', '--logging_steps', '1', '--tf32', 'True', '--model_max_length', '2048', '--gradient_checkpointing', 'True', '--dataloader_num_workers', '4', '--lazy_preprocess', 'True', '--force_reserve_layer', 'True', '--reserve_layer', '-2', '--learnable_gate', 'True', '--confidence_gate', 'False', '--confidence_gate_threshold', '0.6', '--confidence_gate_slope', '10.0', '--save_router_stats', 'True', '--save_steps_router_stats', '5', '--report_to', 'wandb', '--encoder_type', 'siglip']
+====================== SUCCESSFULLY IN MOL TRAINER ROUTER ======================
+[2026-04-04 20:29:30,170] [INFO] [real_accelerator.py:203:get_accelerator] Setting ds_accelerator to cuda (auto detect)
+Warning: The default cache directory for DeepSpeed Triton autotune, /home/sstoica2/.triton/autotune, appears to be on an NFS system. While this is generally acceptable, if you experience slowdowns or hanging when DeepSpeed exits, it is recommended to set the TRITON_CACHE_DIR environment variable to a non-NFS path.
+[93m [WARNING] [0m async_io requires the dev libaio .so object and headers but these were not found.
+[93m [WARNING] [0m async_io: please install the libaio-dev package with apt
+[93m [WARNING] [0m If libaio is already installed (perhaps from source), try setting the CFLAGS and LDFLAGS environment variables to where it can be found.
+[93m [WARNING] [0m Please specify the CUTLASS repo directory as environment variable $CUTLASS_PATH
+[93m [WARNING] [0m sparse_attn requires a torch version >= 1.5 and < 2.0 but detected 2.1
+[93m [WARNING] [0m using untested triton version (2.1.0), only 1.0.0 is known to be compatible
+[2026-04-04 20:29:31,012] [INFO] [comm.py:637:init_distributed] cdb=None
+[2026-04-04 20:29:31,012] [INFO] [comm.py:668:init_distributed] Initializing TorchBackend in DeepSpeed with backend nccl
+vision_tower_cfg.use_text_enc True
+Vision tower clip encoder type:  google/siglip-so400m-patch14-384
+Loading Dino Tower with dino encoder type:  siglip
+use_text_enc :  True
+
+ Loaded SiglipVisionTextTower
+use_text_enc:  True
+Formatting inputs...Skip in lazy mode
+TRAINABLE parameters: ['model.mm_projector.0.weight', 'model.mm_projector.0.bias', 'model.mm_projector.2.weight', 'model.mm_projector.2.bias', 'router_clip._weight_fn.weights', 'router_clip.reserve_gate.weight', 'router_clip.reserve_gate.bias', 'router_clip.text_attn_q.weight', 'router_clip.text_attn_q.bias', 'router_clip.text_attn_k.weight', 'router_clip.text_attn_k.bias']
+TRAINABLE OPTIMIZER
+
+=== group 3: lr=1.000e-03 wd=0.0 ===
+  model.mm_projector.0.weight
+  model.mm_projector.2.weight
+
+=== group 5: lr=1.000e-03 wd=0.0 ===
+  model.mm_projector.0.bias
+  model.mm_projector.2.bias
+
+=== group 7: lr=1.000e-05 wd=0.0 ===
+  router_clip._weight_fn.weights
+  router_clip.reserve_gate.weight
+  router_clip.reserve_gate.bias
+  router_clip.text_attn_q.weight
+  router_clip.text_attn_q.bias
+  router_clip.text_attn_k.weight
+  router_clip.text_attn_k.bias
+[2026-04-04 20:29:45,504] [INFO] [launch.py:319:sigkill_handler] Killing subprocess 1111515
+[2026-04-04 20:29:45,696] [INFO] [launch.py:319:sigkill_handler] Killing subprocess 1111515
+[2026-04-04 20:29:45,853] [INFO] [launch.py:328:sigkill_handler] Main process received SIGINT, exiting
+[2026-04-04 20:29:45,867] [INFO] [launch.py:319:sigkill_handler] Killing subprocess 1111515
+[2026-04-04 20:29:45,868] [INFO] [launch.py:328:sigkill_handler] Main process received SIGINT, exiting

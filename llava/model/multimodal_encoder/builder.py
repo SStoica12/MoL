@@ -67,5 +67,4 @@ def build_vision_tower(vision_tower_cfg, load_model = "clip", **kwargs):
         else:
             rank0_print("\n Loaded CLIPVisionTower")
             CLIPVisionTower(vision_tower_clip, args=vision_tower_cfg, **kwargs)        
-
-    raise ValueError(f'Unknown clip vision tower: {vision_tower_clip} and dino vision tower: {vision_tower_dino}')
+    raise ValueError(f"Unkown clip vision tower {vision_tower_clip}" if "clip" in load_model else f"Unkown dino vision tower {vision_tower_dino}")

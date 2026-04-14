@@ -137,6 +137,11 @@ class LengthGroupedSampler(Sampler):
 
 
 class LLaVATrainer(Trainer):
+    def __init__(self, encoder_type, fusion_type_when_preparing_inputs, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.encoder_type = encoder_type
+        self.fusion_type = fusion_type_when_preparing_inputs
+
 
     def _get_train_sampler(self) -> Optional[torch.utils.data.Sampler]:
         if self.train_dataset is None or not has_length(self.train_dataset):
@@ -165,14 +170,25 @@ class LLaVATrainer(Trainer):
 
         opt_model = self.model
 
+        # rank0_print(f"[DeepSpeed check] self.optimizer type: {type(self.optimizer)}")
+        # rank0_print(f"[DeepSpeed check] optimizer: {self.optimizer.__dict__}")
+        # import sys; sys.exit(0)
         if self.optimizer is None:
             decay_parameters = get_parameter_names(opt_model, ALL_LAYERNORM_LAYERS)
             decay_parameters = [name for name in decay_parameters if "bias" not in name and "scaling" not in name]
             scalar_parameters = [n for n, p in opt_model.named_parameters() if "scaling" in n and p.requires_grad]
-            if self.args.mm_projector_lr is not None:
+            
+            optimizer_grouped_parameters = []
+            if self.args.mm_projector_lr is not None or self.args.dino_mm_projector_lr is not None:
+                # set dino_mm_projector_lr and mm_projector_lr equal if one is defined and not the other
+                if self.args.dino_mm_projector_lr is None:
+                    self.args.dino_mm_projector_lr = self.args.mm_projector_lr
+                if self.args.mm_projector_lr is None:
+                    self.args.mm_projector_lr = self.args.dino_mm_projector_lr
+
                 projector_parameters = [name for name, _ in opt_model.named_parameters() if "mm_projector" in name]
                 optimizer_grouped_parameters = [
-                    # non-projector, non-scaling params with decay
+                    # non-projector, non-scaling, non-router params with decay
                     {
                         "params": [
                             p for n, p in opt_model.named_parameters()
@@ -191,7 +207,7 @@ class LLaVATrainer(Trainer):
                         "lr": self.args.mm_projector_lr * 0.1,  # optional
                     },
 
-                    # non-projector, non-scaling params without decay
+                    # non-projector, non-scaling, non-router params without decay
                     {
                         "params": [
                             p for n, p in opt_model.named_parameters()
@@ -254,7 +270,24 @@ class LLaVATrainer(Trainer):
                         "weight_decay": 0.0,
                     },
                 ]
+
             # import pdb; pdb.set_trace()
+            rank0_print("TRAINABLE OPTIMIZER")
+            # import pdb; pdb.set_trace()
+            id2name = {id(p): n for n, p in opt_model.named_parameters()}
+            for gi, g in enumerate(optimizer_grouped_parameters):
+                if len(g["params"]) == 0:
+                    continue
+                lr = g.get("lr", self.args.learning_rate)
+                wd = g.get("weight_decay", 0.0)
+                try:
+                    rank0_print(f"\n=== group {gi}: lr={lr:.3e} wd={wd} ===")
+                except:
+                    import pdb; pdb.set_trace()
+                for p in g["params"]:
+                    name = id2name.get(id(p), "<unknown>")
+                    rank0_print(" ", name)
+            # import sys; sys.exit(0)
             optimizer_cls, optimizer_kwargs = Trainer.get_optimizer_cls_and_kwargs(self.args)
 
             self.optimizer = optimizer_cls(optimizer_grouped_parameters, **optimizer_kwargs)
@@ -292,17 +325,27 @@ class LLaVATrainer(Trainer):
 
             run_dir = self._get_output_dir(trial=trial)
             output_dir = os.path.join(run_dir, checkpoint_folder)
+            self._save_optimizer_and_scheduler(output_dir)  # NOTE: save optimizer and scheduler states with deepspeed
 
-            # save MLP and router
-            keys_to_match = ['mm_projector', 'vision_resampler', 'scaling_coef']
+            # Only save Adapter
+            keys_to_match = ['mm_projector', 'vision_resampler']
             if getattr(self.args, "use_im_start_end", False):
                 keys_to_match.extend(['embed_tokens', 'embed_in'])
 
             weight_to_save = get_mm_adapter_state_maybe_zero_3(self.model.named_parameters(), keys_to_match)
-
-            if self.args.local_rank == 0 or self.args.local_rank == -1:
+            if len(weight_to_save) > 0 and (self.args.local_rank == 0 or self.args.local_rank == -1):
                 self.model.config.save_pretrained(output_dir)
                 torch.save(weight_to_save, os.path.join(output_dir, f'mm_projector.bin'))
+            
+            keys_to_match = ['dino_mm_projector']
+            if getattr(self.args, "use_im_start_end", False):
+                keys_to_match.extend(['embed_tokens', 'embed_in'])
+            
+            # import pdb; pdb.set_trace()
+            weight_to_save = get_mm_adapter_state_maybe_zero_3(self.model.named_parameters(), keys_to_match)
+            if (self.args.local_rank == 0 or self.args.local_rank == -1) and len(weight_to_save) > 0:
+                self.model.config.save_pretrained(output_dir)
+                torch.save(weight_to_save, os.path.join(output_dir, f'dino_mm_projector.bin'))
         else:
             super(LLaVATrainer, self)._save_checkpoint(model, trial, metrics)
     
@@ -311,6 +354,26 @@ class LLaVATrainer(Trainer):
             pass
         else:
             super(LLaVATrainer, self)._save(output_dir, state_dict) # problem here
+
+    def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch: torch.Tensor | None = None):
+        # print("============================= compute_loss =============================")
+        inputs["encoder_type"] = self.encoder_type
+        inputs["fusion_type"] = self.fusion_type
+        
+        # input is of type dict dict_keys(['input_ids', 'labels', 'attention_mask', 'clip_texts', 'images', 'dino_images', 'encoder_type', 'interleave']) 
+        # import pdb; pdb.set_trace()
+        images = inputs['images'] 
+        dino_images = inputs['dino_images'] if 'dino_images' in inputs else None
+        if dino_images is None and "dino" in self.encoder_type: # I want to be very clear what images are being passed
+            dino_images = images
+            inputs['dino_images'] = dino_images
+            images = None
+            inputs['images'] = images
+
+        outputs = model(**inputs)
+        loss = outputs.loss
+        assert torch.isnan(loss) == False, "Loss is NaN!"
+        return (loss, outputs) if return_outputs else loss
 
 # =========================================================================== #
 class RouterLLaVATrainer(Trainer):
@@ -596,8 +659,10 @@ class RouterLLaVATrainer(Trainer):
             inputs['dino_images'] = dino_images
             images = None
             inputs['images'] = images
+
         outputs = model(**inputs)
         loss = outputs.loss
+        rank0_print(f"\n ================ main loss: {loss.item():.4f}")
         # print("==================== progressing to get the aux_loss ====================")
         # import pdb; pdb.set_trace()
         if images is not None and dino_images is not None:
@@ -606,8 +671,10 @@ class RouterLLaVATrainer(Trainer):
             if dino_images is not None and images is None:
                 images = dino_images
             load_balance_loss = model.get_aux_loss(images)
+        rank0_print(f"------------------------ END ONE STEP ------------------------")
         self.aux_losses.append(load_balance_loss)
         self.last_aux_loss = float(load_balance_loss.detach().cpu().item())
         loss += model.load_balance_alpha * load_balance_loss
         assert torch.isnan(loss) == False, "Loss is NaN!"
         return (loss, outputs) if return_outputs else loss
+

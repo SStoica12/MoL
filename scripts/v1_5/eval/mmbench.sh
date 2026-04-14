@@ -3,7 +3,7 @@
 SPLIT="mmbench_dev_20230712"
 
 python -m llava.eval.model_vqa_mmbench \
-    --model-path /shared/nas2/sstoica2/MoL/checkpoints/llava-v1.5-13b-moe-finetune_2e-4_text-cond-attn-token-router_learnable-gate_dino_patch_layer \
+    --model-path /shared/nas2/sstoica2/MoL/checkpoints/llava-v1.5-13b-moe-finetune_2e-4_text-cond-attn-token-router_learnable-gate_dino_patch_layer_corrected_k=2 \
     --question-file /shared/nas2/sstoica2/LLaVA/playground/data/eval/mmbench/$SPLIT.tsv \
     --answers-file /shared/nas2/sstoica2/LLaVA/playground/data/eval/mmbench/answers/$SPLIT/llava-v1.5-13b.jsonl \
     --single-pred-prompt \
@@ -14,6 +14,7 @@ python -m llava.eval.model_vqa_mmbench \
     --use_route True \
     --attn_level "patch_layer" \
     --force_reserve_layer True \
+    --num_layers_to_choose 2 \
 
 mkdir -p playground/data/eval/mmbench/answers_upload/$SPLIT
 

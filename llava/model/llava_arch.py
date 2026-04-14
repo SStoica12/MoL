@@ -278,6 +278,7 @@ class LlavaMetaForCausalLM(ABC):
 
     
     def encode_images_withclip(self, images, text_embeds=None, text_attention_mask=None, type_encoder="clip"):
+        rank0_print("\n Encoding images with NO ROUTER CLIP vision tower...")
         image_features_clip = self.get_model().get_vision_tower(load_model = type)(images)
         image_features_clip = self.get_model().mm_projector(image_features_clip)
         return image_features_clip
@@ -285,7 +286,8 @@ class LlavaMetaForCausalLM(ABC):
 
     def encode_images_withdino(self, images, text_embeds=None, text_attention_mask=None):
         # import pdb; pdb.set_trace()
-        image_features_dino = self.get_model().get_vision_tower(load_model = "dino")(images)
+        rank0_print("\n Encoding images with NO ROUTER DINO vision tower...")
+        image_features_dino = self.get_model().get_vision_tower(load_model = "dino")(images)  # torch.Size([32, 256, 1024])
         # print("image_features_dino device", image_features_dino.device) # not reached.
         image_features_dino = self.get_model().dino_mm_projector(image_features_dino)
         return image_features_dino
@@ -315,13 +317,13 @@ class LlavaMetaForCausalLM(ABC):
             dino_vision_tower = self.get_dino_vision_tower()
 
         if dino_images is not None and dino_vision_tower is None:
-            raise ValueError("DINO images provided but no DINO vision tower available. ")
+            raise ValueError("DINO images provided but no DINO vision tower available.")
         if dino_vision_tower is not None and dino_images is None:
-            raise ValueError("DINO Tower provided but no dino images found. ")
+            raise ValueError("DINO Tower provided but no dino images found.")
         if images is None and vision_tower is not None:
-            raise ValueError("CLIP images not provided but CLIP vision tower available")
+            raise ValueError("CLIP images not provided but CLIP vision tower available.")
         if vision_tower is None and images is not None:
-            raise ValueError("CLIP images provided but CLIP vision tower not available")
+            raise ValueError("CLIP images provided but CLIP vision tower not available.")
 
         if (vision_tower is None or images is None or input_ids.shape[1] == 1) and \
                 (dino_vision_tower is None or dino_images is None or input_ids.shape[1] == 1):
@@ -340,7 +342,7 @@ class LlavaMetaForCausalLM(ABC):
                 and vision_tower is not None and hasattr(vision_tower, "encode_text")
             )
             if use_clip_text is False and ("clip" in encoder_type or "siglip" in encoder_type):
-                raise ValueError(" \n we are not using clip_texts. Was this intentional?")
+                raise ValueError(" \n we are not using clip_texts. Please pass in clip_texts.?")
             # print("\n use_clip_text = ", use_clip_text)
             use_dino_text = (
                 dino_texts is not None
@@ -348,10 +350,10 @@ class LlavaMetaForCausalLM(ABC):
                 and dino_vision_tower is not None and hasattr(dino_vision_tower, "encode_text")
             )
             if use_dino_text is False and "dino" in encoder_type:
-                raise ValueError("\n we are not using clip_texts. Was this intentional?")
+                raise ValueError("\n we are not using dino_texts. Please pass in dino_texts")
             # import pdb; pdb.set_trace()
             # print("\n use_dino_text = ", use_dino_text)
-            used_text = False # helps ensure we do not fall into else incorrectly if cip_text = True but dino_text is False
+            used_text = False # helps ensure we do not fall into else incorrectly if clip_text = True but dino_text is False
             if use_clip_text:
                 used_text = True
                 def _sanitize_clip_text(text):

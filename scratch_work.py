@@ -5,6 +5,11 @@ import os
 import numpy as np
 from safetensors import safe_open
 
+vision_tower = torch.hub.load(
+                'facebookresearch/dinov2',
+                'dinov2_vitl14_reg4_dinotxt_tet1280d20h24l'
+            ).visual_model
+import pdb; pdb.set_trace()
 
 # dists = np.load("/shared/nas2/sstoica2/MoL/playground/router_distribution/router_probs_gqa_router_dino_distributin.npy") # (4192, 24)
 # import pdb; pdb.set_trace()

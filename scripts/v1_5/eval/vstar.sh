@@ -23,7 +23,7 @@ MODEL_PATHS=(
     # "${CHECKPOINT_ROOT}/llava-v1.5-13b-moe-finetune_text-cond-attn-patchlayer-router_learnable-gate_lr1e-5-pretrain_lr2e-5-finetune_k2"
     # "${CHECKPOINT_ROOT}/llava-v1.5-13b-moe-finetune_text-cond-attn-patchlayer-router_learnable-gate_lr1e-5-pretrain_lr2e-5-finetune_k4"
     # "${CHECKPOINT_ROOT}/llava-v1.5-13b-moe-finetune_text-cond-attn-patchlayer-router_learnable-gate_lr1e-5-pretrain_lr2e-5-finetune_k6"
-    "${CHECKPOINT_ROOT}/llava-v1.5-13b-moe-finetune_2e-4_text-cond-attn-token-router_learnable-gate_dino_patch_layer"
+    "${CHECKPOINT_ROOT}/llava-v1.5-13b-moe-finetune_dino_no_router"
 )
 
 BENCHMARK_DIR="/shared/nas2/jk100/MoL/playground/data/eval/vstar_bench"
@@ -158,11 +158,13 @@ run_eval_for_model() {
         --max_new_tokens "${MAX_NEW_TOKENS}" \
         --conv-mode "${CONV_MODE}" \
         --benchmark vstar \
-        --use_router True \
-        --mm_use_text_enc \
-        --force_reserve_layer True \
-        --attn_level "patch_layer" \
-        --mm_use_text_enc \
+        --use_router False \
+        
+        # --mm_use_text_enc \
+        # --force_reserve_layer True \
+        # --attn_level "patch_layer" \
+        # --mm_use_text_enc \
+        # --num_layers_to_choose 2 \
 
     python llava/eval/eval_vstar.py \
         --question-file "${QUESTION_FILE}" \

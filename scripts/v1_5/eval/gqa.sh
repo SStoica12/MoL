@@ -12,18 +12,17 @@ GQADIR="/shared/nas2/sstoica2/LLaVA/playground/data/eval/gqa"
 #${GPULIST[$IDX]}
 for IDX in $(seq 0 $((CHUNKS-1))); do
     CUDA_VISIBLE_DEVICES=0,1,2,3 python -m llava.eval.model_vqa_loader \
-        --model-path /shared/nas2/sstoica2/MoL/checkpoints/llava-v1.5-13b-moe-finetune_2e-4_text-cond-attn-token-router_learnable-gate_dino_patch_layer \
+        --model-path /shared/nas2/sstoica2/MoL/checkpoints/llava-v1.5-13b-moe-finetune_dino_no_router \
         --question-file /shared/nas2/sstoica2/LLaVA/playground/data/eval/gqa/$SPLIT.jsonl \
         --image-folder /shared/nas2/sstoica2/LLaVA/playground/data/eval/gqa/images \
         --answers-file /shared/nas2/sstoica2/LLaVA/playground/data/eval/gqa/answers/$SPLIT/$CKPT/${CHUNKS}_${IDX}.jsonl \
         --num-chunks $CHUNKS \
         --chunk-idx $IDX \
         --temperature 0 \
-        --mm_use_text_enc \
         --attn_level "patch_layer" \
         --benchmark gqa \
-        --use_router True \
-        --force_reserve_layer True \
+        --use_router False \
+        --force_reserve_layer False \
         --conv-mode vicuna_v1 & 
 
 done
