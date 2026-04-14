@@ -3,7 +3,7 @@ export DS_BUILD_CPU_ADAM=0
 
 export WANDB_ENTITY="uiucnlp"
 export WANDB_PROJECT="mixture-of-layers"
-export WANDB_NAME="MoL_router_choose_layers_text-cond-attn-patchlayer-router_learnable_gate_lr1e-5-pretrain-finetune_k2_no-delta"
+export WANDB_NAME="MoL_router_choose_layers_text-cond-attn-hybrid-router_disagreement-gate_lr1e-5-pretrain_lr2e-5-finetune"
 export WANDB_MODE="online"  # ensure it uploads
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -11,8 +11,8 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 DEEPSPEED_CONFIG="${DEEPSPEED_CONFIG:-${REPO_ROOT}/scripts/zero3.json}"
 DATA_PATH="${DATA_PATH:-/shared/nas2/sstoica2/LLaVA/playground/data/eval/llava_v1_5_mix665k.json}"
 IMAGE_FOLDER="${IMAGE_FOLDER:-/shared/nas2/sstoica2/LLaVA/playground/data/eval}"
-PRETRAIN_DIR="${PRETRAIN_DIR:-${REPO_ROOT}/checkpoints/llava-v1.5-13b-moe-pretrain_text-cond-attn-patchlayer-router_learnable-gate_lr1e-5-pretrain}"
-OUTPUT_DIR="${OUTPUT_DIR:-${REPO_ROOT}/checkpoints/llava-v1.5-13b-moe-finetune_text-cond-attn-patchlayer-router_learnable-gate_lr1e-5-pretrain_lr2e-5-finetune_k2_no-delta}"
+PRETRAIN_DIR="${PRETRAIN_DIR:-${REPO_ROOT}/checkpoints/llava-v1.5-13b-moe-pretrain_1e-5_text-cond-attn-hybrid-router_pretrain_disagreement-gate}"
+OUTPUT_DIR="${OUTPUT_DIR:-${REPO_ROOT}/checkpoints/llava-v1.5-13b-moe-finetune_text-cond-attn-hybrid-router_disagreement-gate_lr1e-5-pretrain_lr2e-5-finetune}"
 MASTER_PORT="${MASTER_PORT:-29600}"
 
 deepspeed "${REPO_ROOT}/llava/train/train_mem_router.py" \
@@ -29,12 +29,14 @@ deepspeed "${REPO_ROOT}/llava/train/train_mem_router.py" \
     --mm_use_im_start_end False \
     --mm_use_im_patch_token False \
     --mm_use_text_enc True \
-    --num_layers_to_choose 2 \
+    --num_layers_to_choose 1 \
     --use_text_conditioned_router True \
     --text_conditioning attention \
     --text_attention_type qk \
     --text_attention_dim 1024 \
-    --attn_level "patch_layer" \
+    --attn_level "hybrid" \
+    --hybrid_reserve_mode disagreement_gate \
+    --hybrid_disagreement_metric kl_local_global \
     --use_text_only_gating False \
     --text_pool mean \
     --text_scale 1.0 \
@@ -48,7 +50,7 @@ deepspeed "${REPO_ROOT}/llava/train/train_mem_router.py" \
     --gradient_accumulation_steps 2 \
     --evaluation_strategy "no" \
     --save_strategy "steps" \
-    --save_steps 218 \
+    --save_steps 1000 \
     --save_total_limit 100 \
     --learning_rate 2e-5 \
     --mm_projector_lr 2e-5 \
@@ -64,7 +66,7 @@ deepspeed "${REPO_ROOT}/llava/train/train_mem_router.py" \
     --lazy_preprocess True \
     --force_reserve_layer True \
     --reserve_layer -2 \
-    --learnable_gate True \
+    --learnable_gate False \
     --confidence_gate False \
     --confidence_gate_threshold 0.6 \
     --confidence_gate_slope 10.0 \
@@ -75,4 +77,3 @@ deepspeed "${REPO_ROOT}/llava/train/train_mem_router.py" \
     # --router_lr 2e-5 \ - originally
 
 python "${REPO_ROOT}/scripts/v1_5/mol_train_gpu.py" --gpus 0,1,2,3
-

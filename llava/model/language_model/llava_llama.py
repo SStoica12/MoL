@@ -98,6 +98,10 @@ def _build_router_from_config(model, config):
             text_attention_type=getattr(config, "text_attention_type", "concat"),
             text_attention_dim=getattr(config, "text_attention_dim", None),
             attn_level=getattr(config, "attn_level", "layer"),
+            hybrid_reserve_mode=getattr(config, "hybrid_reserve_mode", "local_gate"),
+            hybrid_disagreement_metric=getattr(
+                config, "hybrid_disagreement_metric", "kl_local_global"
+            ),
             **init_kwargs,
         )
     else:

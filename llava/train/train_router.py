@@ -75,6 +75,10 @@ class ModelArguments:
     use_text_only_gating: bool = False
     text_pool: Optional[str] = "mean"
     text_scale: float = 1.0
+    hybrid_beta_init: Optional[float] = None
+    hybrid_beta_override: Optional[float] = None
+    hybrid_reserve_mode: str = "local_gate"
+    hybrid_disagreement_metric: str = "kl_local_global"
     text_conditioning: Optional[str] = "film"
     text_attention_type: Optional[str] = "concat"
     text_attention_dim: Optional[int] = 1024
@@ -217,6 +221,7 @@ class RouterCallback(TrainerCallback):
 
         probs = router.router_probs_per_step.pop(step_key)
         masks = router.expert_mask_per_step.pop(step_key, None)
+        hybrid_debug = getattr(router, "hybrid_debug_per_step", {}).pop(step_key, None)
 
         avg_probs = probs.mean(dim=0).float().detach().cpu()
         for i, v in enumerate(avg_probs):
@@ -226,6 +231,22 @@ class RouterCallback(TrainerCallback):
             usage = masks.mean(dim=0).float().detach().cpu()
             for i, v in enumerate(usage):
                 custom_metrics[f"router/usage_expert_{i}"] = float(v)
+
+        if hybrid_debug is not None:
+            custom_metrics["router/disagreement_mean"] = float(
+                hybrid_debug["disagreement_mean"].item()
+            )
+            disagreement_per_layer = hybrid_debug["disagreement_per_layer_mean"].to(torch.float32)
+            for i, value in enumerate(disagreement_per_layer):
+                custom_metrics[f"router/disagreement_layer_{i}"] = float(value.item())
+
+            custom_metrics["router/beta_mean"] = float(
+                hybrid_debug["beta_mean"].item()
+            )
+            if "reserve_gamma_mean" in hybrid_debug:
+                custom_metrics["router/reserve_gamma_mean"] = float(
+                    hybrid_debug["reserve_gamma_mean"].item()
+                )
 
         custom_metrics["router_temperature"] = float(self.last_temp)
         wandb.log(custom_metrics) 
@@ -1167,7 +1188,34 @@ def train(attn_implementation=None):
         model.config.attn_level = model_args.attn_level
         model.config.text_pool = model_args.text_pool
         model.config.text_scale = model_args.text_scale
+        model.config.hybrid_beta_init = model_args.hybrid_beta_init
+        model.config.hybrid_beta_override = model_args.hybrid_beta_override
+        model.config.hybrid_reserve_mode = model_args.hybrid_reserve_mode
+        model.config.hybrid_disagreement_metric = model_args.hybrid_disagreement_metric
         model.config.num_layers_to_choose = model_args.num_layers_to_choose
+        if model_args.hybrid_beta_init is not None:
+            if not 0.0 < model_args.hybrid_beta_init < 1.0:
+                raise ValueError("hybrid_beta_init must be strictly between 0 and 1.")
+        if model_args.hybrid_beta_override is not None:
+            if not 0.0 <= model_args.hybrid_beta_override <= 1.0:
+                raise ValueError("hybrid_beta_override must be between 0 and 1.")
+        if model_args.hybrid_beta_init is not None and model_args.hybrid_beta_override is not None:
+            raise ValueError("hybrid_beta_init and hybrid_beta_override are mutually exclusive.")
+        if model_args.hybrid_reserve_mode not in ("local_gate", "disagreement_gate"):
+            raise ValueError(
+                "hybrid_reserve_mode must be one of {'local_gate', 'disagreement_gate'}."
+            )
+        if model_args.hybrid_disagreement_metric not in ("kl_local_global",):
+            raise ValueError(
+                "hybrid_disagreement_metric must be 'kl_local_global'."
+            )
+        if (
+            model_args.hybrid_reserve_mode == "disagreement_gate"
+            and model_args.attn_level != "hybrid"
+        ):
+            raise ValueError(
+                "hybrid_reserve_mode='disagreement_gate' requires attn_level='hybrid'."
+            )
         if model_args.use_text_conditioned_router and model_args.use_text_only_gating:
             raise ValueError("use_text_conditioned_router and use_text_only_gating are mutually exclusive.")
         if (model_args.use_text_conditioned_router or model_args.use_text_only_gating) and getattr(model.config, "mm_text_hidden_size", None) is None:
@@ -1206,6 +1254,8 @@ def train(attn_implementation=None):
                 text_attention_type=model_args.text_attention_type,
                 text_attention_dim=model_args.text_attention_dim,
                 attn_level=model_args.attn_level,
+                hybrid_reserve_mode=model_args.hybrid_reserve_mode,
+                hybrid_disagreement_metric=model_args.hybrid_disagreement_metric,
                 force_reserve_layer=model_args.force_reserve_layer,
                 reserve_layer=model_args.reserve_layer,
                 learnable_gate=model_args.learnable_gate,

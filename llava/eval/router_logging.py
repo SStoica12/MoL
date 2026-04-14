@@ -112,6 +112,14 @@ def get_router_selection_metadata(model, batch_index: int = 0) -> dict[str, Any]
     if reserve_layer_index is not None:
         metadata["reserve_layer_index"] = int(reserve_layer_index)
 
+    hybrid_reserve_mode = payload.get("hybrid_reserve_mode")
+    if hybrid_reserve_mode is not None:
+        metadata["hybrid_reserve_mode"] = hybrid_reserve_mode
+
+    hybrid_disagreement_metric = payload.get("hybrid_disagreement_metric")
+    if hybrid_disagreement_metric is not None:
+        metadata["hybrid_disagreement_metric"] = hybrid_disagreement_metric
+
     reserve_layer_prob = payload.get("reserve_layer_prob")
     if reserve_layer_prob is not None and batch_index < reserve_layer_prob.shape[0]:
         sample_reserve = reserve_layer_prob[batch_index].to(torch.float32)
@@ -123,6 +131,19 @@ def get_router_selection_metadata(model, batch_index: int = 0) -> dict[str, Any]
                 "mean": float(sample_reserve.mean().item()),
                 "min": float(sample_reserve.min().item()),
                 "max": float(sample_reserve.max().item()),
+            }
+
+    hybrid_disagreement = payload.get("hybrid_disagreement")
+    if hybrid_disagreement is not None and batch_index < hybrid_disagreement.shape[0]:
+        sample_disagreement = hybrid_disagreement[batch_index].to(torch.float32)
+        if sample_disagreement.ndim == 0:
+            metadata["hybrid_disagreement"] = float(sample_disagreement.item())
+        else:
+            metadata["hybrid_disagreement_summary"] = {
+                "shape": list(sample_disagreement.shape),
+                "mean": float(sample_disagreement.mean().item()),
+                "min": float(sample_disagreement.min().item()),
+                "max": float(sample_disagreement.max().item()),
             }
 
     return {"router": metadata}

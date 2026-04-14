@@ -127,20 +127,22 @@ CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 bash scripts/v1_5/eval/seed.sh
 
 ### LLaVA-Bench-in-the-Wild
 
-1. Extract contents of [`llava-bench-in-the-wild`](https://huggingface.co/datasets/liuhaotian/llava-bench-in-the-wild) to `./playground/data/eval/llava-bench-in-the-wild`.
+1. The script can prepare the benchmark directory automatically from [`liuhaotian/llava-bench-in-the-wild`](https://huggingface.co/datasets/liuhaotian/llava-bench-in-the-wild). It expects `questions.jsonl`, `context.jsonl`, `answers_gpt4.jsonl`, and `images/` under `./playground/data/eval/llava-bench-in-the-wild`.
 2. Single-GPU inference and evaluate.
 ```Shell
 CUDA_VISIBLE_DEVICES=0 bash scripts/v1_5/eval/llavabench.sh
 ```
+3. Standardized outputs are written under `./playground/data/eval/llava-bench-in-the-wild/answers/<ckpt>/`, including `predictions.jsonl`, `summary.json`, `details.jsonl`, and `review.jsonl`.
 
 ### MM-Vet
 
-1. Extract [`mm-vet.zip`](https://github.com/yuweihao/MM-Vet/releases/download/v1/mm-vet.zip) to `./playground/data/eval/mmvet`.
+1. Extract [`mm-vet.zip`](https://github.com/yuweihao/MM-Vet/releases/download/v1/mm-vet.zip) to `./playground/data/eval/mmvet` (or pass `--archive-file` to the script). The standardized launcher will generate `questions.jsonl` from `mm-vet.json`.
 2. Single-GPU inference.
 ```Shell
 CUDA_VISIBLE_DEVICES=0 bash scripts/v1_5/eval/mmvet.sh
 ```
-3. Evaluate the predictions in `./playground/data/eval/mmvet/results` using the official jupyter notebook.
+3. Standardized outputs are written under `./playground/data/eval/mmvet/answers/<ckpt>/`, and the official MM-Vet submission json is exported to `./playground/data/eval/mmvet/results/<ckpt>.json`.
+4. If you want the original external evaluation flow, you can still evaluate the exported json in `./playground/data/eval/mmvet/results` using the official notebook.
 
 ## More Benchmarks
 
@@ -155,6 +157,24 @@ Below are awesome benchmarks for multimodal understanding from the research comm
 CUDA_VISIBLE_DEVICES=0 bash scripts/v1_5/eval/qbench.sh dev
 ```
 4. Submit the results by instruction [here](https://github.com/VQAssessment/Q-Bench#option-1-submit-results): `./playground/data/eval/qbench/llvisionqa_dev_answers.jsonl`.
+
+### DocVQA
+
+1. The standardized launcher can prepare the benchmark automatically from [`lmms-lab/DocVQA`](https://huggingface.co/datasets/lmms-lab/DocVQA). By default it uses the `DocVQA` config and the `validation` split.
+2. Single-GPU inference and evaluate.
+```Shell
+CUDA_VISIBLE_DEVICES=0 bash scripts/v1_5/eval/docvqa.sh
+```
+3. Outputs are written under `./playground/data/eval/DocVQA/answers/<split>/<ckpt>/`, including `predictions.jsonl`, `summary.json`, and `details.jsonl`.
+
+### MME-RealWorld
+
+1. The standardized launcher can prepare the benchmark automatically from the ready-to-eval mirror [`yifanzhang114/MME-RealWorld-Lmms-eval`](https://huggingface.co/datasets/yifanzhang114/MME-RealWorld-Lmms-eval), which mirrors the official [`yifanzhang114/MME-RealWorld`](https://huggingface.co/datasets/yifanzhang114/MME-RealWorld) benchmark in parquet form for evaluation.
+2. Single-GPU inference and evaluate.
+```Shell
+CUDA_VISIBLE_DEVICES=0 bash scripts/v1_5/eval/mme_realworld.sh
+```
+3. Outputs are written under `./playground/data/eval/MME-RealWorld/answers/<split>/<ckpt>/`, including `predictions.jsonl`, `summary.json`, and `details.jsonl`.
 
 ### Chinese-Q-Bench
 

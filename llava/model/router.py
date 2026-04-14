@@ -38,6 +38,7 @@ class Router(nn.Module):
         # Cache the latest routing decision during inference so eval writers can
         # attach per-question layer selections to their output rows.
         self._latest_routing_decision = None
+        self.hybrid_debug_per_step = {}
         if self.learnable_gate and self.confidence_gate:
             raise ValueError("learnable_gate and confidence_gate are mutually exclusive.")
         # stats 
@@ -76,6 +77,7 @@ class Router(nn.Module):
         layers: torch.Tensor,
         probs: torch.Tensor,
         reserve_layer_prob: Optional[torch.Tensor] = None,
+        extra_payload: Optional[dict] = None,
     ) -> None:
         if self.training:
             self._latest_routing_decision = None
@@ -93,6 +95,12 @@ class Router(nn.Module):
         if reserve_layer_prob is not None:
             payload["reserve_layer_index"] = int(self._resolve_reserve_idx(self.num_layers))
             payload["reserve_layer_prob"] = reserve_layer_prob.detach().to(torch.float32).cpu()
+        if extra_payload is not None:
+            for key, value in extra_payload.items():
+                if torch.is_tensor(value):
+                    payload[key] = value.detach().to(torch.float32).cpu()
+                else:
+                    payload[key] = value
 
         self._latest_routing_decision = payload
 
@@ -105,6 +113,17 @@ class Router(nn.Module):
         if strategy == "cls":
             return router_probs[:, :1, :]
         raise ValueError(f"Unexpected select feature: {strategy}")
+
+    @staticmethod
+    def _cast_tensor_for_module(tensor: torch.Tensor, module: Optional[nn.Module]) -> torch.Tensor:
+        if tensor is None or module is None:
+            return tensor
+        param = next(module.parameters(), None)
+        if param is None:
+            return tensor
+        if tensor.device != param.device or tensor.dtype != param.dtype:
+            tensor = tensor.to(device=param.device, dtype=param.dtype)
+        return tensor
 
     def _topk_expert_mask(self, router_probs: torch.Tensor) -> torch.Tensor:
         k = min(self.num_layers_to_choose, router_probs.shape[-1])
@@ -218,19 +237,19 @@ class Router(nn.Module):
 
         p = router_probs
 
-        p_layer = p[:, layer]                       # [B]
+        p_layer = p[:, layer]
         cap_t = torch.tensor(cap, device=p.device, dtype=p.dtype)
 
         # rows where we need to cap
-        need = p_layer > cap_t                     # [B]
+        need = p_layer > cap_t
         if not need.any():
             return p
 
         # sum of non-last mass
-        p_other_sum = p[:, :layer].sum(dim=-1) +  p[:, layer + 1:].sum(dim=-1)    # [B]
+        p_other_sum = p[:, :layer].sum(dim=-1) +  p[:, layer + 1:].sum(dim=-1)
         # print(p_other_sum)
         # scale factor to make non-last sum become (1 - cap)
-        scale = (1.0 - cap_t) / (p_other_sum + eps)   # [B]
+        scale = (1.0 - cap_t) / (p_other_sum + eps)
 
         # build output
         p_new = p.clone()
@@ -301,6 +320,7 @@ class Router(nn.Module):
                     )
                 reserve_hidden = hidden_states[self.reserve_layer]  # [B, N, H]
                 pooled = reserve_hidden.mean(dim=1)  # [B, H]
+                pooled = self._cast_tensor_for_module(pooled, self.reserve_gate)
                 gate_logits = self.reserve_gate(pooled).squeeze(-1)
                 reserve_layer_prob = torch.sigmoid(gate_logits)
             else:
@@ -354,9 +374,10 @@ class Router(nn.Module):
             # renormalize top-k probs to sum to (1 - reserve_layer_prob)
             remaining_mass = (1.0 - reserve_layer_prob).clamp(min=0.0)
             probs_sum = probs.sum(dim=-1, keepdim=True)
+            safe_probs_sum = probs_sum.clamp(min=1e-8)
             scale = torch.where(
                 probs_sum > 0,
-                remaining_mass.unsqueeze(-1) / probs_sum,
+                remaining_mass.unsqueeze(-1) / safe_probs_sum,
                 torch.zeros_like(probs_sum),
             )
             # NOTE: we are just adjusting the scale of probs to sum to (1 - reserve_layer_prob), 
@@ -430,7 +451,9 @@ class TextConditionedRouter(Router):
         text_conditioning: str = "film", # "film" or "attention"
         text_attention_type: str = "concat", # "concat" or "qk"
         text_attention_dim: Optional[int] = None,
-        attn_level: str = "layer", # "token", "layer", or "patch_layer" (used when text_conditioning == "attention")
+        attn_level: str = "layer", # "token", "layer", "patch_layer", or "hybrid" (used when text_conditioning == "attention")
+        hybrid_reserve_mode: str = "local_gate",  # the "local_gate" uses only vision hidden states to compute the reserved layer gate, while "disagreement_gate" uses the disagreement between local and global router probs to compute the gate.
+        hybrid_disagreement_metric: str = "kl_local_global",
         force_reserve_layer: bool = False,
         reserve_layer: int = -2,
         learnable_gate: bool = False,
@@ -457,6 +480,15 @@ class TextConditionedRouter(Router):
         self.text_conditioning = text_conditioning
         self.text_attention_type = text_attention_type
         self.attn_level = attn_level
+        self.hybrid_reserve_mode = getattr(config, "hybrid_reserve_mode", hybrid_reserve_mode)
+        self.hybrid_disagreement_metric = getattr(
+            config,
+            "hybrid_disagreement_metric",
+            hybrid_disagreement_metric,
+        )
+        self.hybrid_beta_gate = None
+        self.hybrid_reserve_d_weight = None
+        self.hybrid_reserve_d_bias = None
         self.vision_hidden_size = self._infer_vision_hidden_size(config, weights)
         if self.vision_hidden_size is None:
             raise ValueError(
@@ -473,8 +505,20 @@ class TextConditionedRouter(Router):
         # Conditioning modules.
         if self.text_conditioning not in ("film", "attention", "attn"):
             raise ValueError(f"Unknown text_conditioning: {self.text_conditioning}")
-        if self.attn_level not in ("token", "layer", "patch_layer"):
+        if self.attn_level not in ("token", "layer", "patch_layer", "hybrid"):
             raise ValueError(f"Unknown attn_level: {self.attn_level}")
+        if self.attn_level == "hybrid" and self.text_conditioning == "film":
+            raise ValueError("attn_level='hybrid' requires attention-based text conditioning.")
+        if self.hybrid_reserve_mode not in ("local_gate", "disagreement_gate"):
+            raise ValueError(f"Unknown hybrid_reserve_mode: {self.hybrid_reserve_mode}")
+        if self.hybrid_disagreement_metric not in ("kl_local_global",):
+            raise ValueError(
+                f"Unknown hybrid_disagreement_metric: {self.hybrid_disagreement_metric}"
+            )
+        if self.hybrid_reserve_mode == "disagreement_gate" and self.attn_level != "hybrid":
+            raise ValueError(
+                "hybrid_reserve_mode='disagreement_gate' requires attn_level='hybrid'."
+            )
         if self.text_conditioning == "film":
             # Map pooled text embedding -> FiLM (gamma, beta) for vision hidden size.
             self.text_to_film = nn.Linear(self.text_hidden_size, self.vision_hidden_size * 2)
@@ -499,6 +543,24 @@ class TextConditionedRouter(Router):
                 self.text_attn_k = nn.Linear(self.vision_hidden_size, self.text_attn_dim)
                 self.text_attn_scale = 1.0 / math.sqrt(self.text_attn_dim)
                 self.text_attn_mlp = None
+
+        if self.attn_level == "hybrid":
+            self.hybrid_beta_gate = nn.Linear(self.text_hidden_size, 1)
+            nn.init.zeros_(self.hybrid_beta_gate.weight)
+            hybrid_beta_init = getattr(config, "hybrid_beta_init", None)
+            if hybrid_beta_init is None:
+                hybrid_beta_bias = -1.5
+            else:
+                hybrid_beta_init = float(min(max(hybrid_beta_init, 1e-4), 1.0 - 1e-4))
+                hybrid_beta_bias = math.log(
+                    hybrid_beta_init / (1.0 - hybrid_beta_init)
+                )
+            nn.init.constant_(self.hybrid_beta_gate.bias, hybrid_beta_bias)
+            if self.hybrid_reserve_mode == "disagreement_gate":
+                self.hybrid_reserve_d_weight = nn.Parameter(torch.tensor(0.0))
+                self.hybrid_reserve_d_bias = nn.Parameter(
+                    torch.tensor(math.log(0.20 / 0.80))
+                )
 
     def _infer_vision_hidden_size(self, config, weights):
         if weights is not None and weights.ndim == 2 and weights.numel() > 0:
@@ -546,7 +608,7 @@ class TextConditionedRouter(Router):
         return (text_embeds * mask).sum(dim=1) / denom
 
     def _router_projection_dtype(self):
-        for module_name in ("text_to_film", "text_attn_mlp", "text_attn_q", "text_attn_k", "reserve_gate"):
+        for module_name in ("text_to_film", "text_attn_mlp", "text_attn_q", "text_attn_k", "reserve_gate", "hybrid_beta_gate"):
             module = getattr(self, module_name, None)
             if module is None:
                 continue
@@ -579,8 +641,7 @@ class TextConditionedRouter(Router):
         beta = beta.unsqueeze(0).unsqueeze(2)
         return hidden_states * (1 + gamma) + beta
 
-    def _condition_hidden_states_attention(self, hidden_states, text_embeds, text_attention_mask):
-        original_hidden_states = hidden_states
+    def _attention_text_summary(self, hidden_states, text_embeds, text_attention_mask):
         text_summary = self._pool_text(text_embeds, text_attention_mask).to(
             device=hidden_states.device
         )
@@ -589,6 +650,212 @@ class TextConditionedRouter(Router):
         )
         if self.text_scale is not None:
             text_summary = text_summary * self.text_scale
+        return hidden_states, text_summary
+
+    def _compute_layer_attention_scores(self, hidden_states, text_embeds, text_attention_mask):
+        hidden_states, text_summary = self._attention_text_summary(
+            hidden_states, text_embeds, text_attention_mask
+        )
+        layer_summary = hidden_states.mean(dim=2)  # [L, B, H]
+        if self.text_attention_type == "concat":
+            text_expanded = text_summary.unsqueeze(0).expand(layer_summary.shape[0], -1, -1)
+            concat = torch.cat([layer_summary, text_expanded], dim=-1)
+            scores = self.text_attn_mlp(concat).squeeze(-1)  # [L, B]
+        else:
+            q = self.text_attn_q(text_summary)  # [B, D]
+            k = self.text_attn_k(layer_summary)  # [L, B, D]
+            scores = (k * q.unsqueeze(0)).sum(dim=-1) * self.text_attn_scale  # [L, B]
+        return scores
+
+    def _compute_patch_attention_scores(self, hidden_states, text_embeds, text_attention_mask):
+        hidden_states, text_summary = self._attention_text_summary(
+            hidden_states, text_embeds, text_attention_mask
+        )
+        if self.text_attention_type == "concat":
+            text_expanded = text_summary.unsqueeze(0).unsqueeze(2)
+            text_expanded = text_expanded.expand(
+                hidden_states.shape[0], -1, hidden_states.shape[2], -1
+            )
+            concat = torch.cat([hidden_states, text_expanded], dim=-1)
+            scores = self.text_attn_mlp(concat).squeeze(-1)  # [L, B, N]
+        else:
+            q = self.text_attn_q(text_summary)  # [B, D]
+            k = self.text_attn_k(hidden_states)  # [L, B, N, D]
+            scores = (k * q.unsqueeze(0).unsqueeze(2)).sum(dim=-1) * self.text_attn_scale  # [L, B, N]
+        return scores
+
+    def _compute_patch_router_scores(self, hidden_states, text_embeds, text_attention_mask):
+        scores = self._compute_patch_attention_scores(
+            hidden_states, text_embeds, text_attention_mask
+        )
+        scores = scores.permute(1, 2, 0).to(torch.float32)  # [B, N, L]
+        if self.training:
+            random_noise = torch.rand(scores.shape, device=scores.device)
+            scores = scores + random_noise
+
+        temperature = self.router_temperature if self.router_temperature is not None else 1.0
+        if temperature != 1.0:
+            scores = scores / temperature
+        return scores
+
+    def _compute_hybrid_beta(self, hidden_states, text_embeds, text_attention_mask):
+        hybrid_beta_override = getattr(self.config, "hybrid_beta_override", None)
+        if hybrid_beta_override is not None:
+            hybrid_beta_override = float(min(max(hybrid_beta_override, 0.0), 1.0))
+            return torch.full(
+                (hidden_states.shape[1], 1, 1),
+                hybrid_beta_override,
+                device=hidden_states.device,
+                dtype=torch.float32,
+            )
+
+        _, text_summary = self._attention_text_summary(
+            hidden_states, text_embeds, text_attention_mask
+        )
+        if self.hybrid_beta_gate is None:
+            raise ValueError("hybrid_beta_gate is not initialized. Use attn_level='hybrid'.")
+        text_summary = self._cast_tensor_for_module(text_summary, self.hybrid_beta_gate)
+        beta_logits = self.hybrid_beta_gate(text_summary).to(torch.float32)  # [B, 1]
+        return torch.sigmoid(beta_logits).unsqueeze(1)  # [B, 1, 1]
+
+    def _compute_hybrid_disagreement(
+        self,
+        global_non_reserved: torch.Tensor,
+        local_non_reserved: torch.Tensor,
+    ) -> torch.Tensor:
+        return self._compute_hybrid_disagreement_terms(
+            global_non_reserved, local_non_reserved
+        ).sum(dim=-1)
+
+    def _compute_hybrid_disagreement_terms(
+        self,
+        global_non_reserved: torch.Tensor,
+        local_non_reserved: torch.Tensor,
+    ) -> torch.Tensor:
+        if self.hybrid_disagreement_metric != "kl_local_global":
+            raise ValueError(
+                f"Unsupported hybrid_disagreement_metric: {self.hybrid_disagreement_metric}"
+            )
+        eps = 1e-8
+        global_log = torch.log(global_non_reserved.clamp(min=eps)).unsqueeze(1)
+        local_log = torch.log(local_non_reserved.clamp(min=eps))
+        return local_non_reserved * (local_log - global_log)
+
+    def _compute_hybrid_reserve_from_disagreement(
+        self, disagreement: torch.Tensor
+    ) -> torch.Tensor:
+        if self.hybrid_reserve_d_weight is None or self.hybrid_reserve_d_bias is None:
+            raise ValueError(
+                "hybrid_reserve_d_weight and hybrid_reserve_d_bias are not initialized. "
+                "Use hybrid_reserve_mode='disagreement_gate'."
+            )
+        disagreement = disagreement.to(torch.float32)
+        weight = self.hybrid_reserve_d_weight.to(
+            device=disagreement.device, dtype=torch.float32
+        )
+        bias = self.hybrid_reserve_d_bias.to(
+            device=disagreement.device, dtype=torch.float32
+        )
+        return torch.sigmoid(weight * disagreement + bias)
+
+    def _make_disagreement_debug_payload(
+        self,
+        disagreement: torch.Tensor,
+        disagreement_terms: torch.Tensor,
+        reserve_layer_prob: Optional[torch.Tensor],
+        beta: torch.Tensor,
+        num_layers: int,
+    ) -> Optional[dict]:
+        disagreement = self._select_router_tokens(disagreement.unsqueeze(-1)).squeeze(-1)
+        disagreement_terms = self._select_router_tokens(disagreement_terms)
+        beta = beta.to(torch.float32)
+        if reserve_layer_prob is not None:
+            reserve_layer_prob = self._select_router_tokens(
+                reserve_layer_prob.unsqueeze(-1)
+            ).squeeze(-1)
+
+        flat_disagreement = disagreement.reshape(-1).to(torch.float32)
+        flat_disagreement_terms = disagreement_terms.reshape(
+            -1, disagreement_terms.shape[-1]
+        ).to(torch.float32)
+        flat_reserve = None
+        finite_mask = torch.isfinite(flat_disagreement)
+        finite_mask = finite_mask & torch.isfinite(flat_disagreement_terms).all(dim=-1)
+
+        if reserve_layer_prob is not None:
+            flat_reserve = reserve_layer_prob.reshape(-1).to(torch.float32)
+            finite_mask = finite_mask & torch.isfinite(flat_reserve)
+
+        if not finite_mask.any():
+            return None
+
+        flat_disagreement = flat_disagreement[finite_mask]
+        flat_disagreement_terms = flat_disagreement_terms[finite_mask]
+        if flat_reserve is not None:
+            flat_reserve = flat_reserve[finite_mask]
+
+        if self.force_reserve_layer:
+            reserve_idx = self._resolve_reserve_idx(num_layers)
+            disagreement_per_layer = flat_disagreement_terms.new_zeros(
+                flat_disagreement_terms.shape[0], num_layers
+            )
+            disagreement_per_layer[:, :reserve_idx] = flat_disagreement_terms[:, :reserve_idx]
+            disagreement_per_layer[:, reserve_idx + 1 :] = flat_disagreement_terms[:, reserve_idx:]
+        else:
+            disagreement_per_layer = flat_disagreement_terms
+
+        payload = {
+            "disagreement_mean": flat_disagreement.mean().detach().cpu(),
+            "disagreement_per_layer_mean": disagreement_per_layer.mean(dim=0).detach().cpu(),
+            "beta_mean": beta.mean().detach().cpu(),
+        }
+
+        if flat_reserve is not None:
+            payload["reserve_gamma_mean"] = flat_reserve.mean().detach().cpu()
+
+        return payload
+
+    def _remove_reserved_layer(self, probs: torch.Tensor, reserve_idx: int) -> torch.Tensor:
+        return torch.cat((probs[..., :reserve_idx], probs[..., reserve_idx + 1 :]), dim=-1)
+
+    def _restore_reserved_layer(
+        self,
+        non_reserved_probs: torch.Tensor,
+        reserve_layer_prob: torch.Tensor,
+        num_layers: int,
+    ) -> torch.Tensor:
+        reserve_idx = self._resolve_reserve_idx(num_layers)
+        full_probs = non_reserved_probs.new_zeros(non_reserved_probs.shape[:-1] + (num_layers,))
+        full_probs[..., :reserve_idx] = non_reserved_probs[..., :reserve_idx]
+        full_probs[..., reserve_idx] = reserve_layer_prob
+        full_probs[..., reserve_idx + 1 :] = non_reserved_probs[..., reserve_idx:]
+        return full_probs
+
+    def _global_layer_router_probs(self, hidden_states, text_embeds, text_attention_mask):
+        scores = self._compute_layer_attention_scores(
+            hidden_states, text_embeds, text_attention_mask
+        )
+        scores = scores.permute(1, 0).to(torch.float32)  # [B, L]
+        if self.training:
+            scores = scores + torch.rand(scores.shape, device=scores.device)
+
+        temperature = self.router_temperature if self.router_temperature is not None else 1.0
+        if temperature != 1.0:
+            scores = scores / temperature
+
+        if self.force_reserve_layer:
+            reserve_idx = self._resolve_reserve_idx(scores.shape[-1])
+            masked_scores = scores.clone()
+            masked_scores[:, reserve_idx] = -1e9
+            return torch.softmax(masked_scores, dim=-1).to(scores.dtype)
+
+        return torch.softmax(scores, dim=-1).to(scores.dtype)
+
+    def _condition_hidden_states_attention(self, hidden_states, text_embeds, text_attention_mask):
+        original_hidden_states = hidden_states
+        hidden_states, text_summary = self._attention_text_summary(
+            hidden_states, text_embeds, text_attention_mask
+        )
 
         if self.attn_level == "token":
             if self.text_attention_type == "concat":
@@ -612,15 +879,9 @@ class TextConditionedRouter(Router):
 
         if self.attn_level == "layer":
             # Layer-level attention.
-            layer_summary = hidden_states.mean(dim=2)  # [L, B, H]
-            if self.text_attention_type == "concat":
-                text_expanded = text_summary.unsqueeze(0).expand(layer_summary.shape[0], -1, -1)
-                concat = torch.cat([layer_summary, text_expanded], dim=-1)
-                scores = self.text_attn_mlp(concat).squeeze(-1)  # [L, B]
-            else:
-                q = self.text_attn_q(text_summary)  # [B, D]
-                k = self.text_attn_k(layer_summary)  # [L, B, D]
-                scores = (k * q.unsqueeze(0)).sum(dim=-1) * self.text_attn_scale  # [L, B]
+            scores = self._compute_layer_attention_scores(
+                hidden_states, text_embeds, text_attention_mask
+            )
 
             # Normalize across layers, then scale each layer's tokens.
             attn = torch.softmax(scores, dim=0).to(
@@ -631,7 +892,7 @@ class TextConditionedRouter(Router):
 
         raise ValueError(
             f"attn_level={self.attn_level} is not supported by hidden-state conditioning; "
-            "use patch_layer routing path in forward."
+            "use patch_layer or hybrid routing path in forward."
         )
 
     def _resolve_reserve_idx(self, num_layers):
@@ -640,7 +901,14 @@ class TextConditionedRouter(Router):
             reserve_idx = num_layers + reserve_idx
         return reserve_idx
 
-    def _patch_layer_router_probs(self, hidden_states, text_embeds, text_attention_mask):
+    def _patch_layer_router_probs(
+        self,
+        hidden_states,
+        text_embeds,
+        text_attention_mask,
+        save_stats: bool = True,
+        apply_cap: bool = True,
+    ):
         """Compute per-patch distributions over layers.
 
         Returns:
@@ -648,36 +916,9 @@ class TextConditionedRouter(Router):
             router_probs_for_selection: [B, N, L] probabilities with reserved layer masked out when enabled.
             reserve_layer_prob: [B, N] reserved-layer mixing weight for each patch.
         """
-        text_summary = self._pool_text(text_embeds, text_attention_mask).to(
-            device=hidden_states.device
+        scores = self._compute_patch_router_scores(
+            hidden_states, text_embeds, text_attention_mask
         )
-        hidden_states, text_summary = self._cast_router_projection_inputs(
-            hidden_states, text_summary
-        )
-        if self.text_scale is not None:
-            text_summary = text_summary * self.text_scale
-
-        if self.text_attention_type == "concat":
-            text_expanded = text_summary.unsqueeze(0).unsqueeze(2)
-            text_expanded = text_expanded.expand(
-                hidden_states.shape[0], -1, hidden_states.shape[2], -1
-            )
-            concat = torch.cat([hidden_states, text_expanded], dim=-1)
-            scores = self.text_attn_mlp(concat).squeeze(-1)  # [L, B, N]
-        else:
-            q = self.text_attn_q(text_summary)  # [B, D]
-            k = self.text_attn_k(hidden_states)  # [L, B, N, D]
-            scores = (k * q.unsqueeze(0).unsqueeze(2)).sum(dim=-1) * self.text_attn_scale  # [L, B, N]
-
-        # Reorder for per-patch routing: softmax over layers for each (B, N).
-        scores = scores.permute(1, 2, 0).to(torch.float32)  # [B, N, L]
-        if self.training:
-            random_noise = torch.rand(scores.shape, device=scores.device)
-            scores = scores + random_noise
-
-        temperature = self.router_temperature if self.router_temperature is not None else 1.0
-        if temperature != 1.0:
-            scores = scores / temperature
 
         if self.learnable_gate and self.confidence_gate:
             raise ValueError("learnable_gate and confidence_gate are mutually exclusive.")
@@ -695,6 +936,7 @@ class TextConditionedRouter(Router):
                         device=hidden_states.device, dtype=hidden_states.dtype
                     )
                 reserve_hidden = hidden_states[self.reserve_layer]  # [B, N, H]
+                reserve_hidden = self._cast_tensor_for_module(reserve_hidden, self.reserve_gate)
                 gate_logits = self.reserve_gate(reserve_hidden).squeeze(-1)
                 reserve_layer_prob = torch.sigmoid(gate_logits)  # [B, N]
             else:
@@ -709,7 +951,7 @@ class TextConditionedRouter(Router):
         else:
             router_probs = torch.softmax(scores, dim=-1).to(scores.dtype)  # [B, N, L]
 
-        if self.save_router_stats and self.training:
+        if save_stats and self.save_router_stats and self.training:
             router_probs_summary = router_probs.mean(dim=1)  # [B, L]
             if self.step_rp % self.save_steps_router_stats or self.step_rp == 0:
                 self.router_probs_per_step[self.step_rp] = (
@@ -717,7 +959,7 @@ class TextConditionedRouter(Router):
                 )
             self.step_rp += 1
 
-        if self.cap_softmax:
+        if apply_cap and self.cap_softmax:
             B, N, L = router_probs.shape
             router_probs = self.cap_layer_prob(
                 router_probs.reshape(B * N, L),
@@ -733,6 +975,130 @@ class TextConditionedRouter(Router):
             return router_probs, router_probs_for_selection, reserve_layer_prob
 
         return router_probs, router_probs, None
+
+    def _hybrid_patch_layer_router_probs(
+        self,
+        hidden_states,
+        text_embeds,
+        text_attention_mask,
+        save_stats: bool = True,
+        apply_cap: bool = True,
+    ):
+        """Fuse global image-level and local patch-level routing via weighted PoE."""
+        global_probs = self._global_layer_router_probs(
+            hidden_states, text_embeds, text_attention_mask
+        )  # [B, L]
+        hybrid_extra_payload = {
+            "hybrid_reserve_mode": self.hybrid_reserve_mode,
+        }
+
+        if self.hybrid_reserve_mode == "disagreement_gate" and self.force_reserve_layer:
+            local_scores = self._compute_patch_router_scores(
+                hidden_states, text_embeds, text_attention_mask
+            )
+            local_probs = torch.softmax(local_scores, dim=-1).to(torch.float32)
+            reserve_idx = self._resolve_reserve_idx(local_probs.shape[-1])
+            reserve_layer_prob = None
+            local_non_reserved_mass = self._remove_reserved_layer(local_probs, reserve_idx)
+            remaining_mass = local_probs[:, :, reserve_idx].mul(-1.0).add(1.0).clamp(min=0.0)
+            local_non_reserved = torch.where(
+                remaining_mass.unsqueeze(-1) > 0,
+                local_non_reserved_mass / remaining_mass.unsqueeze(-1).clamp(min=1e-8),
+                torch.zeros_like(local_non_reserved_mass),
+            )
+        else:
+            local_probs, _, reserve_layer_prob = self._patch_layer_router_probs(
+                hidden_states,
+                text_embeds,
+                text_attention_mask,
+                save_stats=False,
+                apply_cap=False,
+            )  # [B, N, L]
+
+            if self.force_reserve_layer:
+                reserve_idx = self._resolve_reserve_idx(local_probs.shape[-1])
+                local_non_reserved_mass = self._remove_reserved_layer(local_probs, reserve_idx)
+                remaining_mass = (1.0 - reserve_layer_prob).clamp(min=0.0)
+                local_non_reserved = torch.where(
+                    remaining_mass.unsqueeze(-1) > 0,
+                    local_non_reserved_mass / remaining_mass.unsqueeze(-1).clamp(min=1e-8),
+                    torch.zeros_like(local_non_reserved_mass),
+                )
+            else:
+                local_non_reserved = local_probs
+        beta = self._compute_hybrid_beta(
+            hidden_states, text_embeds, text_attention_mask
+        )  # [B, 1, 1]
+
+        if self.force_reserve_layer:
+            global_non_reserved = self._remove_reserved_layer(global_probs, reserve_idx)
+        else:
+            global_non_reserved = global_probs
+
+        eps = 1e-8
+        hybrid_logits = (
+            (1.0 - beta) * torch.log(global_non_reserved.clamp(min=eps)).unsqueeze(1)
+            + beta * torch.log(local_non_reserved.clamp(min=eps))
+        )
+        hybrid_non_reserved = torch.softmax(hybrid_logits, dim=-1).to(local_probs.dtype)
+        disagreement_terms = self._compute_hybrid_disagreement_terms(
+            global_non_reserved, local_non_reserved
+        )
+        disagreement = disagreement_terms.sum(dim=-1)
+
+        if self.force_reserve_layer:
+            if self.hybrid_reserve_mode == "disagreement_gate":
+                reserve_layer_prob = self._compute_hybrid_reserve_from_disagreement(
+                    disagreement
+                ).to(local_probs.dtype)
+                hybrid_extra_payload["hybrid_disagreement_metric"] = (
+                    self.hybrid_disagreement_metric
+                )
+                hybrid_extra_payload["hybrid_disagreement"] = disagreement
+            routed_mass = hybrid_non_reserved * (1.0 - reserve_layer_prob).unsqueeze(-1)
+            router_probs = self._restore_reserved_layer(
+                routed_mass,
+                reserve_layer_prob,
+                local_probs.shape[-1],
+            )
+        else:
+            router_probs = hybrid_non_reserved
+
+        if apply_cap and self.cap_softmax:
+            B, N, L = router_probs.shape
+            router_probs = self.cap_layer_prob(
+                router_probs.reshape(B * N, L),
+                self.cap_softmax_value,
+                self.reserve_layer,
+            ).reshape(B, N, L)
+
+        if self.force_reserve_layer:
+            reserve_idx = self._resolve_reserve_idx(router_probs.shape[-1])
+            router_probs_for_selection = router_probs.clone()
+            router_probs_for_selection[:, :, reserve_idx] = -1.0
+            reserve_layer_prob = router_probs[:, :, reserve_idx]
+        else:
+            router_probs_for_selection = router_probs
+            reserve_layer_prob = None
+
+        if save_stats and self.save_router_stats and self.training:
+            router_probs_summary = router_probs.mean(dim=1)  # [B, L]
+            if self.step_rp % self.save_steps_router_stats or self.step_rp == 0:
+                self.router_probs_per_step[self.step_rp] = (
+                    router_probs_summary.cpu().to(torch.float32).detach()
+                )
+                disagreement_payload = self._make_disagreement_debug_payload(
+                    disagreement,
+                    disagreement_terms,
+                    reserve_layer_prob,
+                    beta,
+                    router_probs.shape[-1],
+                )
+                if disagreement_payload is not None:
+                    self.hybrid_debug_per_step[self.step_rp] = disagreement_payload
+            self.step_rp += 1
+
+        return router_probs, router_probs_for_selection, reserve_layer_prob, hybrid_extra_payload
 
     def _get_patch_layer_and_scaling_probs(
         self,
@@ -753,9 +1119,10 @@ class TextConditionedRouter(Router):
                 raise ValueError("reserve_layer_prob must be provided when force_reserve_layer=True.")
             remaining_mass = (1.0 - reserve_layer_prob).clamp(min=0.0)
             probs_sum = probs.sum(dim=-1, keepdim=True)
+            safe_probs_sum = probs_sum.clamp(min=1e-8)
             scale = torch.where(
                 probs_sum > 0,
-                remaining_mass.unsqueeze(-1) / probs_sum,
+                remaining_mass.unsqueeze(-1) / safe_probs_sum,
                 torch.zeros_like(probs_sum),
             )
             probs = probs * scale
@@ -779,6 +1146,14 @@ class TextConditionedRouter(Router):
             )
             # Keep API compatible with [B, L] expected by auxiliary loss code.
             return patch_router_probs.mean(dim=1)
+        if (
+            self.text_conditioning in ("attention", "attn")
+            and self.attn_level == "hybrid"
+        ):
+            hybrid_router_probs, _, _, _ = self._hybrid_patch_layer_router_probs(
+                hidden_states, text_embeds, text_attention_mask
+            )
+            return hybrid_router_probs.mean(dim=1)
         conditioned_hidden_states = self._condition_hidden_states(
             hidden_states, text_embeds, text_attention_mask
         )
@@ -822,6 +1197,55 @@ class TextConditionedRouter(Router):
                 layers,
                 probs,
                 reserve_layer_prob=reserve_layer_prob,
+            )
+            gather_idx = layers.unsqueeze(-1).expand(-1, -1, -1, H)
+            selected_hidden_states = torch.gather(hidden_states, 2, gather_idx)  # [B, N, k, H]
+            probs = probs.to(hidden_states.dtype)
+            image_features = (probs.unsqueeze(-1) * selected_hidden_states).sum(dim=2)  # [B, N, H]
+
+            if self.force_reserve_layer:
+                reserve_idx = self._resolve_reserve_idx(L)
+                reserve_hidden_state = hidden_states[:, :, reserve_idx, :]  # [B, N, H]
+                reserve_layer_prob = reserve_layer_prob.to(hidden_states.dtype)
+                image_features = image_features + reserve_layer_prob.unsqueeze(-1) * reserve_hidden_state
+
+            image_features = self._select_vision_features(image_features)
+            assert image_features.ndim == 3
+            return image_features
+
+        if (
+            text_embeds is not None
+            and self.text_conditioning in ("attention", "attn")
+            and self.attn_level == "hybrid"
+        ):  # hybrid global-local attention with per-patch top-k layer routing
+            self.num_layers = L
+            (
+                router_probs,
+                router_probs_for_selection,
+                reserve_layer_prob,
+                hybrid_extra_payload,
+            ) = self._hybrid_patch_layer_router_probs(
+                hidden_states, text_embeds, text_attention_mask
+            )
+            self._latest_router_probs_for_aux = {
+                "kind": "patch_layer",
+                "router_probs": router_probs,
+                "router_probs_for_selection": router_probs_for_selection,
+                "reserve_layer_prob": reserve_layer_prob,
+            }
+
+            hidden_states = hidden_states.permute(1, 2, 0, 3)  # [B, N, L, H]
+            layers, probs, reserve_layer_prob = self._get_patch_layer_and_scaling_probs(
+                router_probs,
+                router_probs_for_selection,
+                reserve_layer_prob,
+            )
+            self._cache_latest_routing_decision(
+                "hybrid_patch_level",
+                layers,
+                probs,
+                reserve_layer_prob=reserve_layer_prob,
+                extra_payload=hybrid_extra_payload,
             )
             gather_idx = layers.unsqueeze(-1).expand(-1, -1, -1, H)
             selected_hidden_states = torch.gather(hidden_states, 2, gather_idx)  # [B, N, k, H]

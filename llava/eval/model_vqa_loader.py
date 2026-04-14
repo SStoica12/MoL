@@ -89,7 +89,15 @@ class CustomDataset(Dataset):
                 image_file if os.path.isabs(image_file) else os.path.join(self.image_folder, image_file)
                 for image_file in image_files
             ]
-            images = [Image.open(image_path).convert('RGB') for image_path in resolved_paths]
+            images = []
+            for image_path in resolved_paths:
+                try:
+                    with Image.open(image_path) as image:
+                        images.append(image.convert('RGB'))
+                except Exception as exc:
+                    raise OSError(
+                        f"Failed to load image '{image_path}' for question_id={line.get('question_id')}: {exc}"
+                    ) from exc
             image_tensor = process_images(images, self.image_processor, self.model_config)
             image_sizes = [image.size for image in images]
             input_ids = tokenizer_image_token(prompt, self.tokenizer, IMAGE_TOKEN_INDEX, return_tensors='pt')

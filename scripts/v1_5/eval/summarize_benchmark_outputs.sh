@@ -101,6 +101,29 @@ HRBENCH8K_OUT_ROOT="${HRBENCH8K_OUT_ROOT:-${HRBENCH8K_ROOT}/answers}"
 HRBENCH8K_QUESTION_FILE="${HRBENCH8K_QUESTION_FILE:-${HRBENCH8K_ROOT}/questions.jsonl}"
 HRBENCH8K_EVAL_SCRIPT="${HRBENCH8K_EVAL_SCRIPT:-llava/eval/eval_hrbench.py}"
 
+# MMStar
+MMSTAR_ROOT="${MMSTAR_ROOT:-./playground/data/eval/MMStar}"
+MMSTAR_SPLIT="${MMSTAR_SPLIT:-val}"
+MMSTAR_OUT_ROOT="${MMSTAR_OUT_ROOT:-${MMSTAR_ROOT}/answers/${MMSTAR_SPLIT}}"
+MMSTAR_QUESTION_FILE="${MMSTAR_QUESTION_FILE:-${MMSTAR_ROOT}/${MMSTAR_SPLIT}.jsonl}"
+MMSTAR_EVAL_SCRIPT="${MMSTAR_EVAL_SCRIPT:-llava/eval/eval_mmstar.py}"
+
+# MMVet
+MMVET_ROOT="${MMVET_ROOT:-./playground/data/eval/mmvet}"
+MMVET_OUT_ROOT="${MMVET_OUT_ROOT:-${MMVET_ROOT}/answers}"
+MMVET_ANNOTATION_FILE="${MMVET_ANNOTATION_FILE:-${MMVET_ROOT}/mm-vet.json}"
+MMVET_EVAL_SCRIPT="${MMVET_EVAL_SCRIPT:-llava/eval/eval_mmvet.py}"
+MMVET_JUDGE_MODEL="${MMVET_JUDGE_MODEL:-${JUDGE_MODEL:-}}"
+MMVET_JUDGE_API_KEY="${MMVET_JUDGE_API_KEY:-${OPENAI_API_KEY:-}}"
+MMVET_JUDGE_BASE_URL="${MMVET_JUDGE_BASE_URL:-${OPENAI_BASE_URL:-${OPENAI_API_BASE:-}}}"
+MMVET_JUDGE_NUM_RUNS="${MMVET_JUDGE_NUM_RUNS:-1}"
+
+# MMVP
+MMVP_ROOT="${MMVP_ROOT:-./playground/data/eval/MMVP}"
+MMVP_OUT_ROOT="${MMVP_OUT_ROOT:-${MMVP_ROOT}/answers}"
+MMVP_QUESTION_FILE="${MMVP_QUESTION_FILE:-${MMVP_ROOT}/questions.jsonl}"
+MMVP_EVAL_SCRIPT="${MMVP_EVAL_SCRIPT:-llava/eval/eval_mmvp.py}"
+
 # V*Bench
 VSTAR_ROOT="${VSTAR_ROOT:-./playground/data/eval/vstar_bench}"
 VSTAR_OUT_ROOT="${VSTAR_OUT_ROOT:-${VSTAR_ROOT}/answers}"
@@ -114,7 +137,7 @@ DTD_OUT_ROOT="${DTD_OUT_ROOT:-${DTD_ROOT}/answers/${DTD_RUN_NAME}}"
 DTD_QUESTION_FILE="${DTD_QUESTION_FILE:-${DTD_OUT_ROOT}/questions.jsonl}"
 DTD_EVAL_SCRIPT="${DTD_EVAL_SCRIPT:-llava/eval/eval_dtd.py}"
 
-ALL_BENCHMARKS=(mmbench gqa seed pope textvqa mme vizwiz vqav2 hallusionbench realworldqa chartqa hrbench4k hrbench8k vstar dtd)
+ALL_BENCHMARKS=(mmbench gqa seed pope textvqa mme vizwiz vqav2 hallusionbench realworldqa chartqa hrbench4k hrbench8k mmstar mmvet mmvp vstar dtd)
 
 success_count=0
 skip_count=0
@@ -128,10 +151,10 @@ Usage:
 Examples:
   bash scripts/v1_5/eval/summarize_benchmark_outputs.sh all
   bash scripts/v1_5/eval/summarize_benchmark_outputs.sh gqa
-  bash scripts/v1_5/eval/summarize_benchmark_outputs.sh mmbench gqa seed hallusionbench realworldqa chartqa hrbench4k hrbench8k vstar dtd
+  bash scripts/v1_5/eval/summarize_benchmark_outputs.sh mmbench gqa seed hallusionbench realworldqa chartqa hrbench4k hrbench8k mmstar mmvet mmvp vstar dtd
 
 Benchmarks:
-  mmbench gqa seed pope textvqa mme vizwiz vqav2 hallusionbench realworldqa chartqa hrbench4k hrbench8k vstar dtd
+  mmbench gqa seed pope textvqa mme vizwiz vqav2 hallusionbench realworldqa chartqa hrbench4k hrbench8k mmstar mmvet mmvp vstar dtd
 
 Notes:
   - This script does NOT run inference. It only reads existing result jsonl files.
@@ -144,6 +167,9 @@ Notes:
   - ChartQA expects ${CHARTQA_QUESTION_FILE} to exist.
   - HRBench4K expects ${HRBENCH4K_QUESTION_FILE} to exist.
   - HRBench8K expects ${HRBENCH8K_QUESTION_FILE} to exist.
+  - MMStar expects ${MMSTAR_QUESTION_FILE} to exist.
+  - MMVet expects ${MMVET_ANNOTATION_FILE} to exist or judge-free summaries will remain incomplete.
+  - MMVP expects ${MMVP_QUESTION_FILE} to exist.
   - V*Bench expects ${VSTAR_QUESTION_FILE} to exist.
   - DTD expects ${DTD_QUESTION_FILE} to exist. Override DTD_RUN_NAME/DTD_OUT_ROOT for non-default runs.
 EOF
@@ -159,7 +185,7 @@ run_python_script() {
     shift
     shift
     log "${label}"
-    if "$PYTHON_BIN" "$script_path" "$@"; then
+    if PYTHONPATH="${REPO_ROOT}${PYTHONPATH:+:${PYTHONPATH}}" "$PYTHON_BIN" "$script_path" "$@"; then
         success_count=$((success_count + 1))
     else
         fail_count=$((fail_count + 1))
@@ -499,6 +525,88 @@ summarize_hrbench8k() {
     done < <(find "${answer_dir}" -type f -name 'predictions.jsonl' -print0 | sort -z)
 }
 
+summarize_mmstar() {
+    local answer_dir="${MMSTAR_OUT_ROOT}"
+    if [[ ! -d "${answer_dir}" ]]; then
+        log "SKIP mmstar: ${answer_dir} not found"
+        skip_count=$((skip_count + 1))
+        return
+    fi
+    ensure_required_file "${MMSTAR_QUESTION_FILE}" "mmstar" || return
+
+    while IFS= read -r -d '' result_file; do
+        local ckpt_dir
+        ckpt_dir="$(dirname "${result_file}")"
+        run_python_script \
+            "mmstar $(basename "${ckpt_dir}")" \
+            "${MMSTAR_EVAL_SCRIPT}" \
+            --question-file "${MMSTAR_QUESTION_FILE}" \
+            --result-file "${result_file}" \
+            --output-file "${ckpt_dir}/summary.json" \
+            --detail-file "${ckpt_dir}/details.jsonl"
+    done < <(find "${answer_dir}" -type f -name 'predictions.jsonl' -print0 | sort -z)
+}
+
+summarize_mmvet() {
+    local answer_dir="${MMVET_OUT_ROOT}"
+    if [[ ! -d "${answer_dir}" ]]; then
+        log "SKIP mmvet: ${answer_dir} not found"
+        skip_count=$((skip_count + 1))
+        return
+    fi
+    ensure_required_file "${MMVET_ANNOTATION_FILE}" "mmvet" || return
+
+    while IFS= read -r -d '' result_file; do
+        local ckpt_dir
+        local -a args
+        ckpt_dir="$(dirname "${result_file}")"
+        args=(
+            --annotation-file "${MMVET_ANNOTATION_FILE}"
+            --result-file "${result_file}"
+            --grade-file "${ckpt_dir}/grades.json"
+            --output-file "${ckpt_dir}/summary.json"
+            --detail-file "${ckpt_dir}/details.jsonl"
+            --num-runs "${MMVET_JUDGE_NUM_RUNS}"
+        )
+        if [[ -n "${MMVET_JUDGE_MODEL}" ]]; then
+            args+=(--judge-model "${MMVET_JUDGE_MODEL}")
+        fi
+        if [[ -n "${MMVET_JUDGE_API_KEY}" ]]; then
+            args+=(--judge-api-key "${MMVET_JUDGE_API_KEY}")
+        fi
+        if [[ -n "${MMVET_JUDGE_BASE_URL}" ]]; then
+            args+=(--judge-base-url "${MMVET_JUDGE_BASE_URL}")
+        fi
+
+        run_python_script \
+            "mmvet $(basename "${ckpt_dir}")" \
+            "${MMVET_EVAL_SCRIPT}" \
+            "${args[@]}"
+    done < <(find "${answer_dir}" -type f -name 'predictions.jsonl' -print0 | sort -z)
+}
+
+summarize_mmvp() {
+    local answer_dir="${MMVP_OUT_ROOT}"
+    if [[ ! -d "${answer_dir}" ]]; then
+        log "SKIP mmvp: ${answer_dir} not found"
+        skip_count=$((skip_count + 1))
+        return
+    fi
+    ensure_required_file "${MMVP_QUESTION_FILE}" "mmvp" || return
+
+    while IFS= read -r -d '' result_file; do
+        local ckpt_dir
+        ckpt_dir="$(dirname "${result_file}")"
+        run_python_script \
+            "mmvp $(basename "${ckpt_dir}")" \
+            "${MMVP_EVAL_SCRIPT}" \
+            --question-file "${MMVP_QUESTION_FILE}" \
+            --result-file "${result_file}" \
+            --output-file "${ckpt_dir}/summary.json" \
+            --detail-file "${ckpt_dir}/details.jsonl"
+    done < <(find "${answer_dir}" -type f -name 'predictions.jsonl' -print0 | sort -z)
+}
+
 summarize_vstar() {
     local answer_dir="${VSTAR_OUT_ROOT}"
     if [[ ! -d "${answer_dir}" ]]; then
@@ -559,6 +667,9 @@ run_one_benchmark() {
         chartqa) summarize_chartqa ;;
         hrbench4k) summarize_hrbench4k ;;
         hrbench8k) summarize_hrbench8k ;;
+        mmstar) summarize_mmstar ;;
+        mmvet) summarize_mmvet ;;
+        mmvp) summarize_mmvp ;;
         vstar) summarize_vstar ;;
         dtd) summarize_dtd ;;
         *)
