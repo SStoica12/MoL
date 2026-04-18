@@ -90,6 +90,8 @@ class ModelArguments:
     confidence_gate_slope: float = 10.0
     encoder_type: str = "clip"
     fusion_type: str = "cross_attn" # options: cross_attn, mean_pooling, concate_upsample
+    mm_use_text_enc: bool = field(default=False)  # for using image-aligned CLIP text encoder
+
 
 @dataclass
 class DataArguments:

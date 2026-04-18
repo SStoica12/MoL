@@ -1,8 +1,9 @@
 #!/bin/bash
+
 export WANDB_ENTITY="uiucnlp"
 export WANDB_PROJECT="mixture-of-layers"
-NUM_LAYERS_TO_CHOOSE=4
-export WANDB_NAME="MoL_dino_pretrain_text-cond-attn-token-router_pretrain_patch_layer_corrected_k=${NUM_LAYERS_TO_CHOOSE}"
+NUM_LAYERS_TO_CHOOSE=1
+export WANDB_NAME="MoL_dino_pretrain_text-cond-attn-token-router_pretrain_hybrid_k=${NUM_LAYERS_TO_CHOOSE}"
 export WANDB_MODE="online"  # ensure it uploads
 # export WANDB_DIR="/shared/nas2/jk100/MoL/scripts/v1_5/wandb" - where to store wandb logs
 
@@ -11,7 +12,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 DEEPSPEED_CONFIG="${DEEPSPEED_CONFIG:-${REPO_ROOT}/scripts/zero2.json}"
 DATA_PATH="${DATA_PATH:-/shared/nas/data/m1/sstoica2/.cache/huggingface/.cache/huggingface/datasets--Blip/blip_laion_cc_sbu_558k.json}"
 IMAGE_FOLDER="${IMAGE_FOLDER:-/shared/nas/data/m1/sstoica2/.cache/huggingface/.cache/huggingface/datasets--Blip/images}"
-OUTPUT_DIR="${OUTPUT_DIR:-${REPO_ROOT}/checkpoints/llava-v1.5-13b-moe-pretrain_text-cond-attn-token-router_pretrain_dino_patch_layer_k=${NUM_LAYERS_TO_CHOOSE}}"
+OUTPUT_DIR="${OUTPUT_DIR:-${REPO_ROOT}/checkpoints/llava-v1.5-13b-moe-pretrain_text-cond-attn-token-router_dino_hybrid_k=${NUM_LAYERS_TO_CHOOSE}}"
 MASTER_PORT="${MASTER_PORT:-29600}"
 # CUDA_VISIBLE_DEVICES=0,1,2,3 deepspeed
 # deepspeed --include localhost:0
@@ -38,7 +39,9 @@ deepspeed --master_port "${MASTER_PORT}" --include localhost:0,1,2,3 "${REPO_ROO
     --text_conditioning attention \
     --text_attention_type qk \
     --text_attention_dim 1024 \
-    --attn_level "patch_layer" \
+    --attn_level "hybrid" \
+    --hybrid_reserve_mode disagreement_gate \
+    --hybrid_disagreement_metric kl_local_global \
     --use_text_only_gating False \
     --text_pool mean \
     --text_scale 1.0 \
@@ -53,7 +56,7 @@ deepspeed --master_port "${MASTER_PORT}" --include localhost:0,1,2,3 "${REPO_ROO
     --save_steps 2400 \
     --save_total_limit 100 \
     --mm_projector_lr 1e-3 \
-    --router_lr 1e-5 \
+    --router_lr 5e-5 \
     --weight_decay 0. \
     --warmup_ratio 0.03 \
     --lr_scheduler_type "cosine" \
@@ -65,7 +68,7 @@ deepspeed --master_port "${MASTER_PORT}" --include localhost:0,1,2,3 "${REPO_ROO
     --lazy_preprocess True \
     --force_reserve_layer True \
     --reserve_layer -2 \
-    --learnable_gate True \
+    --learnable_gate False \
     --confidence_gate False \
     --confidence_gate_threshold 0.6 \
     --confidence_gate_slope 10.0 \
@@ -76,3 +79,5 @@ deepspeed --master_port "${MASTER_PORT}" --include localhost:0,1,2,3 "${REPO_ROO
 curl -X POST -H 'Content-type: application/json' --data '{"text":"router done"}' https://hooks.slack.com/services/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
 python /shared/nas/data/m1/sstoica2/PAPO_copy/debug_gpu.py --gpus 0,1,2,3 --memory 70
 # add     --report_to wandb \ back.
+
+    # --attn_level "patch_layer" \, --router_lr 1e-5 \

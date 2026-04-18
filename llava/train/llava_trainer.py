@@ -676,5 +676,11 @@ class RouterLLaVATrainer(Trainer):
         self.last_aux_loss = float(load_balance_loss.detach().cpu().item())
         loss += model.load_balance_alpha * load_balance_loss
         assert torch.isnan(loss) == False, "Loss is NaN!"
+        # if getattr(model, "load_balance_alpha", 0.0) != 0.0:
+        #     images = inputs.get('images')
+        #     # print("==================== progressing to get the aux_loss ====================")
+        #     load_balance_loss = model.get_aux_loss(images)
+        #     self.aux_losses.append(load_balance_loss)
+        #     loss += model.load_balance_alpha * load_balance_loss
         return (loss, outputs) if return_outputs else loss
 

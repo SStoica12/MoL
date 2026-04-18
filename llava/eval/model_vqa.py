@@ -76,6 +76,7 @@ def verify_loaded_model(
 
     for shard_path in shard_files:
         rank0_print(f"Checking shard: {shard_path} ...")
+        from safetensors.torch import load_file
         disk_weights = load_file(shard_path)
 
         for key, disk_tensor in disk_weights.items():
@@ -167,7 +168,7 @@ def eval_model(args):
                                                         )
     else:
         rank0_print("\n      not using router")
-        tokenizer, model, image_processor, context_len = load_pretrained_model(model_path=model_path, 
+        tokenizer, model, image_processor_dino, image_processor_clip, context_len = load_pretrained_model(model_path=model_path, 
                                                                                model_base=args.model_base, 
                                                                                model_name=model_name)
 
@@ -202,11 +203,13 @@ def eval_model(args):
             image_tensor_dino = process_images([image], image_processor_dino, model.config)[0]
 
         with torch.inference_mode():
+            # clear_router_selection_metadata(model)
             output_ids = model.generate(
                 input_ids,
                 images=image_tensor_clip.unsqueeze(0).half().cuda(),
                 dino_images=image_tensor_dino.unsqueeze(0).half().cuda(),
                 image_sizes=[image.size],
+                clip_texts=[prompt],
                 do_sample=True if args.temperature > 0 else False,
                 temperature=args.temperature,
                 top_p=args.top_p,
@@ -218,6 +221,7 @@ def eval_model(args):
                 prompts=[cur_prompt] if not isinstance(cur_prompt, list) else cur_prompt,)
 
         outputs = tokenizer.batch_decode(output_ids, skip_special_tokens=True)[0].strip()
+        # metadata = get_router_selection_metadata(model)
 
         ans_id = shortuuid.uuid()
         ans_file.write(json.dumps({"question_id": idx,
@@ -225,7 +229,7 @@ def eval_model(args):
                                    "text": outputs,
                                    "answer_id": ans_id,
                                    "model_id": model_name,
-                                   "metadata": {}}) + "\n")
+                                   "metadata": {}}) + "\n") # metadata
         ans_file.flush()
     ans_file.close()
 

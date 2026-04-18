@@ -1,19 +1,18 @@
 #!/bin/bash
-export DS_BUILD_CPU_ADAM=1
+export DS_BUILD_CPU_ADAM=0
 
-#!/bin/bash
 export WANDB_ENTITY="uiucnlp"
 export WANDB_PROJECT="mixture-of-layers"
-export WANDB_NAME="MoL_router_choose_layers_finetune_text-cond-attn-token-router_confidence-gate_dino_patch_layer_k=${NUM_LAYERS_TO_CHOOSE}"
+export WANDB_NAME="MoL_router_choose_layers_finetune_text-cond-attn-token-router-gate_dino_hybrid_k=${NUM_LAYERS_TO_CHOOSE}"
 export WANDB_MODE="online"  # ensure it uploads
 
-NUM_LAYERS_TO_CHOOSE=4
+NUM_LAYERS_TO_CHOOSE=1
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 DEEPSPEED_CONFIG=/shared/nas2/sstoica2/MoL/scripts/zero3_offload.json
 # DEEPSPEED_CONFIG="${DEEPSPEED_CONFIG:-${REPO_ROOT}/scripts/zero3.json}"
 DATA_PATH="${DATA_PATH:-/shared/nas2/sstoica2/LLaVA/playground/data/eval/llava_v1_5_mix665k.json}"
 IMAGE_FOLDER="${IMAGE_FOLDER:-/shared/nas2/sstoica2/LLaVA/playground/data/eval}"
-OUTPUT_DIR="${OUTPUT_DIR:-${REPO_ROOT}/checkpoints/llava-v1.5-13b-moe-finetune_2e-4_text-cond-attn-token-router_learnable-gate_dino_patch_layer_corrected_k=${NUM_LAYERS_TO_CHOOSE}}"
+OUTPUT_DIR="${OUTPUT_DIR:-${REPO_ROOT}/checkpoints/llava-v1.5-13b-moe-finetune_2e-4_text-cond-attn-token-router_dino_hybrid_corrected_k=${NUM_LAYERS_TO_CHOOSE}}"
 
 # deepspeed --include localhost:1
 #CUDA_VISIBLE_DEVICES=0,1,2,3 deepspeed
@@ -24,7 +23,7 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 deepspeed "${REPO_ROOT}/llava/train/train_mem_route
     --data_path "${DATA_PATH}" \
     --image_folder "${IMAGE_FOLDER}" \
     --vision_tower openai/clip-vit-large-patch14-336 \
-    --pretrain_dino_mm_mlp_adapter /shared/nas2/sstoica2/MoL/checkpoints/llava-v1.5-13b-moe-pretrain_text-cond-attn-token-router_pretrain_dino_patch_layer_k=4/dino_mm_projector.bin \
+    --pretrain_dino_mm_mlp_adapter /shared/nas2/sstoica2/MoL/checkpoints/llava-v1.5-13b-moe-pretrain_text-cond-attn-token-router_dino_hybrid_k=1/dino_mm_projector.bin \
     --mm_projector_type mlp2x_gelu \
     --freeze_residual_scaling_coef True \
     --mm_vision_select_layer -2 \
@@ -36,7 +35,9 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 deepspeed "${REPO_ROOT}/llava/train/train_mem_route
     --text_conditioning attention \
     --text_attention_type qk \
     --text_attention_dim 1024 \
-    --attn_level "patch_layer" \
+    --attn_level "hybrid" \
+    --hybrid_reserve_mode disagreement_gate \
+    --hybrid_disagreement_metric kl_local_global \
     --use_text_only_gating False \
     --text_pool mean \
     --text_scale 1.0 \
@@ -66,7 +67,7 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 deepspeed "${REPO_ROOT}/llava/train/train_mem_route
     --lazy_preprocess True \
     --force_reserve_layer True \
     --reserve_layer -2 \
-    --learnable_gate True \
+    --learnable_gate False \
     --confidence_gate False \
     --confidence_gate_threshold 0.6 \
     --confidence_gate_slope 10.0 \
@@ -76,3 +77,5 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 deepspeed "${REPO_ROOT}/llava/train/train_mem_route
     --encoder_type "dinov2_txt"
 curl -X POST -H 'Content-type: application/json' --data '{"text":"router done"}' https://hooks.slack.com/services/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
 python /shared/nas2/jk100/MoL/scripts/v1_5/mol_train_gpu.py --gpus 0,1,2,3 --memory 70
+
+#   --attn_level "patch_layer" \

@@ -14,7 +14,7 @@ MAX_NEW_TOKENS="${MAX_NEW_TOKENS:-32}"
 # If non-empty, this list takes precedence over --model-path / MODEL_PATH.
 CHECKPOINT_ROOT="/shared/nas2/sstoica2/MoL/checkpoints"
 MODEL_PATHS=(
-    "${CHECKPOINT_ROOT}/llava-v1.5-13b-moe-finetune_dino_no_router"
+    "${CHECKPOINT_ROOT}/llava-v1.5-13b-moe-finetune_2e-4_text-cond-attn-token-router_learnable-gate_dino_patch_layer_corrected_k=4"
 )
 
 BENCHMARK_DIR="/shared/nas2/jk100/MoL/playground/data/eval/HRBench4K"
@@ -154,14 +154,12 @@ run_eval_for_model() {
         --max_new_tokens "${MAX_NEW_TOKENS}" \
         --conv-mode "${CONV_MODE}" \
         --benchmark hrbench4k \
-        --use_router False \
-        
-        # --mm_use_text_enc \
-        # --use_router True \
-        # --force_reserve_layer True \
-        # --attn_level "patch_layer" \
-        # --mm_use_text_enc \
-        # --num_layers_to_choose 2 \
+        --mm_use_text_enc \
+        --use_router True \
+        --force_reserve_layer True \
+        --attn_level "patch_layer" \
+        --mm_use_text_enc \
+        --num_layers_to_choose 4 \
 
     python llava/eval/eval_hrbench.py \
         --question-file "${QUESTION_FILE}" \

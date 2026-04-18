@@ -14,6 +14,38 @@
 
 
 import os
+import re
+import warnings
+import shutil
+
+from transformers import AutoTokenizer, AutoModelForCausalLM, AutoConfig, BitsAndBytesConfig
+import torch
+from llava.model import *
+from llava.constants import DEFAULT_IMAGE_PATCH_TOKEN, DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN
+
+def rank0_print(*args):
+    import os
+    local_rank = int(os.environ.get("LOCAL_RANK", 0))
+    if local_rank == 0:
+        print(*args)
+
+
+#    Copyright 2023 Haotian Liu
+#
+#    Licensed under the Apache License, Version 2.0 (the "License");
+#    you may not use this file except in compliance with the License.
+#    You may obtain a copy of the License at
+#
+#        http://www.apache.org/licenses/LICENSE-2.0
+#
+#    Unless required by applicable law or agreed to in writing, software
+#    distributed under the License is distributed on an "AS IS" BASIS,
+#    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+#    See the License for the specific language governing permissions and
+#    limitations under the License.
+
+
+import os
 import warnings
 import shutil
 import json
@@ -267,7 +299,7 @@ def load_pretrained_model_router(model_path, model_base, model_name,
             image_size = dino_tower.config.image_size
             patch_size = dino_tower.config.patch_size
             hidden_size = dino_tower.config.hidden_size_dino
-            num_image_tokens = (image_size // patch_size)**2 + 1 # 257 even for dino txt, which has 4 registers
+            num_image_tokens = (image_size // patch_size)**2 # 257 even for dino txt, which has 4 registers
             router_dino_weights = torch.zeros((num_image_tokens, hidden_size)).to(dtype=dino_tower.dtype, device=dino_tower.device)
             rank0_print("\n router_dino_weights : ", router_dino_weights.shape)
             # import sys; sys.exit(0)
@@ -381,7 +413,7 @@ def load_pretrained_model_router(model_path, model_base, model_name,
             router_state_dict_clip = {}
             for key, value in shard_weights.items():
                     # We filter for keys belonging to the router
-                    if "router_dino" in key:
+                    if "router_clip" in key:
                         key = key.replace("router_clip.", "")  # need just weights
                         # assert key == "weights"
                         router_state_dict_clip[key] = value

@@ -1,6 +1,6 @@
 #!/bin/bash
 set -euo pipefail
-
+# export CUDA_VISIBLE_DEVICES=1
 MODEL_PATH="${MODEL_PATH:-liuhaotian/llava-v1.5-13b}"
 MODEL_BASE="${MODEL_BASE:-}"
 CONV_MODE="${CONV_MODE:-vicuna_v1}"
@@ -23,7 +23,7 @@ MODEL_PATHS=(
     # "${CHECKPOINT_ROOT}/llava-v1.5-13b-moe-finetune_text-cond-attn-patchlayer-router_learnable-gate_lr1e-5-pretrain_lr2e-5-finetune_k2"
     # "${CHECKPOINT_ROOT}/llava-v1.5-13b-moe-finetune_text-cond-attn-patchlayer-router_learnable-gate_lr1e-5-pretrain_lr2e-5-finetune_k4"
     # "${CHECKPOINT_ROOT}/llava-v1.5-13b-moe-finetune_text-cond-attn-patchlayer-router_learnable-gate_lr1e-5-pretrain_lr2e-5-finetune_k6"
-    "${CHECKPOINT_ROOT}/llava-v1.5-13b-moe-finetune_dino_no_router"
+    "${CHECKPOINT_ROOT}/llava-v1.5-13b-moe-finetune_2e-4_text-cond-attn-token-router_learnable-gate_dino_patch_layer_corrected_k=4"
 )
 
 BENCHMARK_DIR="/shared/nas2/jk100/MoL/playground/data/eval/vstar_bench"
@@ -37,17 +37,6 @@ OUTPUT_DIR="${OUTPUT_DIR:-}"
 ANSWERS_FILE="${ANSWERS_FILE:-}"
 SUMMARY_FILE="${SUMMARY_FILE:-}"
 DETAIL_FILE="${DETAIL_FILE:-}"
-
-
-echo "========================= \n benchmark_dir: ${BENCHMARK_DIR}"
-echo "========================= \n hf_dataset: ${HF_DATASET}"
-echo "========================= \n hf_revision: ${HF_REVISION}"
-echo "========================= \n hf_token: ${HF_TOKEN}"
-echo "========================= \n question_file: ${QUESTION_FILE}"
-echo "========================= \n ANSWERS_FILE: ${ANSWERS_FILE}"
-echo "========================= \n OUTPUT_DIR: ${OUTPUT_DIR}"
-echo "========================= \n SUMMARY_FILE: ${SUMMARY_FILE}"
-echo "========================= \n DETAIL_FILE: ${DETAIL_FILE}"
 
 usage() {
     cat <<EOF
@@ -158,13 +147,14 @@ run_eval_for_model() {
         --max_new_tokens "${MAX_NEW_TOKENS}" \
         --conv-mode "${CONV_MODE}" \
         --benchmark vstar \
-        --use_router False \
-        
-        # --mm_use_text_enc \
-        # --force_reserve_layer True \
-        # --attn_level "patch_layer" \
-        # --mm_use_text_enc \
-        # --num_layers_to_choose 2 \
+        --mm_use_text_enc \
+        --force_reserve_layer True \
+        --attn_level "patch_layer" \
+        --num_layers_to_choose 4 \
+        --use_router True \
+        --encoder_type dinov2_txt
+
+        # --use_router False \
 
     python llava/eval/eval_vstar.py \
         --question-file "${QUESTION_FILE}" \

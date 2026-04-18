@@ -7,6 +7,10 @@ import shortuuid
 
 from llava.constants import IMAGE_TOKEN_INDEX, DEFAULT_IMAGE_TOKEN, DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN
 from llava.conversation import conv_templates, SeparatorStyle
+from llava.eval.router_logging import (
+    clear_router_selection_metadata,
+    get_router_selection_metadata,
+)
 from llava.model.builder import load_pretrained_model
 from llava.utils import disable_torch_init
 from llava.mm_utils import tokenizer_image_token, process_images, get_model_name_from_path
@@ -216,11 +220,13 @@ def eval_model(args):
         input_ids = tokenizer_image_token(prompt, tokenizer, IMAGE_TOKEN_INDEX, return_tensors='pt').unsqueeze(0).cuda()
 
         with torch.inference_mode():
+            clear_router_selection_metadata(model)
             output_ids = model.generate(
                 input_ids,
                 images=images_clip,
                 dino_images=images_dino,
                 image_sizes=image_sizes,
+                clip_texts=[prompt] if images is not None else None,
                 do_sample=True if args.temperature > 0 else False,
                 temperature=args.temperature,
                 max_new_tokens=1024,
@@ -230,6 +236,7 @@ def eval_model(args):
             )
 
         outputs = tokenizer.batch_decode(output_ids, skip_special_tokens=True)[0].strip()
+        metadata = get_router_selection_metadata(model)
 
         ans_id = shortuuid.uuid()
         ans_file.write(json.dumps({"question_id": idx,
@@ -237,7 +244,7 @@ def eval_model(args):
                                    "text": outputs,
                                    "answer_id": ans_id,
                                    "model_id": model_name,
-                                   "metadata": {}}) + "\n")
+                                   "metadata": metadata}) + "\n")
         ans_file.flush()
     ans_file.close()
 

@@ -25,6 +25,94 @@ from transformers.modeling_outputs import CausalLMOutputWithPast
 from transformers.generation.utils import GenerateOutput
 
 from ..llava_arch import LlavaMetaModel, LlavaMetaForCausalLM
+from ..router import Router, TextConditionedRouter, TextOnlyRouter
+
+
+def _config_requires_router(config):
+    if getattr(config, "has_router", False):
+        return True
+    architectures = getattr(config, "architectures", None) or []
+    if any(str(arch).startswith("RouterLlava") for arch in architectures):
+        return True
+    if getattr(config, "use_text_conditioned_router", False):
+        return True
+    if getattr(config, "use_text_only_gating", False):
+        return True
+    return False
+
+
+def _router_init_kwargs(config):
+    return {
+        "load_balancing_alpha": getattr(config, "load_balancing_alpha", 10**-2),
+        "force_reserve_layer": getattr(config, "force_reserve_layer", False),
+        "reserve_layer": getattr(config, "reserve_layer", -2),
+        "learnable_gate": getattr(config, "learnable_gate", False),
+        "confidence_gate": getattr(config, "confidence_gate", False),
+        "confidence_gate_threshold": getattr(config, "confidence_gate_threshold", 0.6),
+        "confidence_gate_slope": getattr(config, "confidence_gate_slope", 10.0),
+        "vision_feature_select_strategy": getattr(config, "mm_vision_select_feature", "patch"),
+    }
+
+
+def _apply_router_runtime_settings(router, config, top_k):
+    router.num_layers_to_choose = top_k
+    router.save_router_stats = getattr(config, "save_router_stats", False)
+    router.save_steps_router_stats = getattr(config, "save_steps_router_stats", 200)
+    router.cap_softmax = getattr(config, "cap_softmax", False)
+    router.cap_softmax_value = getattr(config, "cap_softmax_value", 0.06)
+    return router
+
+
+def _build_router_from_config(model, config):
+    vision_tower = model.get_model().get_vision_tower()
+    if vision_tower is None:
+        raise ValueError("Router checkpoint requires a vision tower to reconstruct the router.")
+
+    hidden_size = vision_tower.hidden_size
+    num_image_tokens = vision_tower.num_patches + 1
+    router_weights = torch.zeros(
+        (num_image_tokens, hidden_size),
+        dtype=model.lm_head.weight.dtype,
+        device=model.lm_head.weight.device,
+    )
+    top_k = getattr(config, "num_layers_to_choose", 1)
+    init_kwargs = _router_init_kwargs(config)
+
+    if getattr(config, "use_text_only_gating", False):
+        router = TextOnlyRouter(
+            config,
+            router_weights,
+            top_k=top_k,
+            text_pool=getattr(config, "text_pool", "mean"),
+            text_scale=getattr(config, "text_scale", 1.0),
+            **init_kwargs,
+        )
+    elif getattr(config, "use_text_conditioned_router", False):
+        router = TextConditionedRouter(
+            config,
+            router_weights,
+            top_k=top_k,
+            text_pool=getattr(config, "text_pool", "mean"),
+            text_scale=getattr(config, "text_scale", 1.0),
+            text_conditioning=getattr(config, "text_conditioning", "film"),
+            text_attention_type=getattr(config, "text_attention_type", "concat"),
+            text_attention_dim=getattr(config, "text_attention_dim", None),
+            attn_level=getattr(config, "attn_level", "layer"),
+            hybrid_reserve_mode=getattr(config, "hybrid_reserve_mode", "local_gate"),
+            hybrid_disagreement_metric=getattr(
+                config, "hybrid_disagreement_metric", "kl_local_global"
+            ),
+            **init_kwargs,
+        )
+    else:
+        router = Router(
+            config,
+            router_weights,
+            top_k=top_k,
+            **init_kwargs,
+        )
+
+    return _apply_router_runtime_settings(router, config, top_k)
 
 def rank0_print(*args):
     import os
@@ -146,6 +234,7 @@ class LlavaLlamaForCausalLM(LlamaForCausalLM, LlavaMetaForCausalLM):
     ) -> Union[GenerateOutput, torch.LongTensor]:
         position_ids = kwargs.pop("position_ids", None)
         attention_mask = kwargs.pop("attention_mask", None)
+        clip_texts = kwargs.pop("clip_texts", None)
         if "inputs_embeds" in kwargs:
             raise NotImplementedError("`inputs_embeds` is not supported")
 
@@ -211,6 +300,9 @@ class DoubleRouterLlavaLlamaForCausalLM(LlavaLlamaForCausalLM): # for both dino 
         super().__init__(config)
         self.router_clip = router
         self.router_dino = router
+        if router is None and _config_requires_router(config):
+            router = _build_router_from_config(self, config)
+        self.router = router
         self.load_balance_alpha = load_balance_alpha
         self.aggregate_type = aggregate_type
         if aggregate_type=="linear":
@@ -312,21 +404,20 @@ class DoubleRouterLlavaLlamaForCausalLM(LlavaLlamaForCausalLM): # for both dino 
             vision_tower_dino = self.get_model().get_vision_tower(load_model="dino")
         device = vision_tower_clip.device
         dtype = vision_tower_clip.dtype
-        losses = []
         if type(images) is list:
             losses_clip = []
             losses_dino = []
             for image, dino_image in zip(images, dino_images):
                 image_forward_outs_clip = vision_tower_clip(image.to(device=device, dtype=dtype), output_hidden_states=True) # all 25 layers have  torch.Size([32, 577, 1024])
-                image_forward_outs_dino = vision_tower_dino(dino_image.to(device=device, dtype=dtype), output_hidden_states=True)
+                _, hidden_states = vision_tower_dino(dino_image.to(device=device, dtype=dtype), output_hidden_states=True)
                 router_probs_clip = self.get_router_probs_clip(image_forward_outs_clip.hidden_states)
-                router_probs_dino = self.get_router_probs_dino(image_forward_outs_dino.hidden_states)
+                router_probs_dino = self.get_router_probs_dino(hidden_states)
                 losses_clip.append(self.router_clip.load_balance_loss(router_probs_clip))
                 losses_dino.append(self.router_dino.load_balance_loss(router_probs_dino))
             loss = sum(losses_clip) / len(losses_clip) + sum(losses_dino) / len(losses_dino)
         else:
             image_forward_outs_clip = vision_tower_clip(images.to(device=device, dtype=dtype), output_hidden_states=True) # all 25 layers have  torch.Size([32, 577, 1024])
-            image_forward_outs_dino, hidden_states = vision_tower_dino(dino_images.to(device=device, dtype=dtype), output_hidden_states=True)
+            _, hidden_states = vision_tower_dino(dino_images.to(device=device, dtype=dtype), output_hidden_states=True)
             router_probs_clip = self.get_router_probs_clip(image_forward_outs_clip.hidden_states)
             router_probs_dino = self.get_router_probs_dino(hidden_states)
             loss_clip = self.router_clip.load_balance_loss(router_probs_clip)
@@ -433,6 +524,7 @@ class RouterLlavaLlamaForCausalLM(LlavaLlamaForCausalLM):
         # import pdb; pdb.set_trace()
         cached_router_probs_clip = None
         cached_router_probs_dino = None
+        
         if "clip" in self.encoder_type or "siglip" in self.encoder_type:
             cached_router_probs_clip = getattr(self.router_clip, "_latest_router_probs_for_aux_clip", None)
         if "dino" in self.encoder_type:

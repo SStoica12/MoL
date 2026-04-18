@@ -129,6 +129,7 @@ def main(args):
                 images=image_tensor_clip,
                 dino_images = image_tensor_dino,
                 image_sizes=[image_size], # will calculate in function. #TODO: change to calculate outside if needed
+                clip_texts=[prompt],
                 do_sample=True if args.temperature > 0 else False,
                 temperature=args.temperature,
                 max_new_tokens=args.max_new_tokens,

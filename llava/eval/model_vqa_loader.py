@@ -17,6 +17,14 @@ import math
 import types
 import matplotlib.pyplot as plt
 
+from llava.constants import (
+    IMAGE_TOKEN_INDEX,
+    DEFAULT_IMAGE_TOKEN,
+    DEFAULT_IM_START_TOKEN,
+    DEFAULT_IM_END_TOKEN,
+    IMAGE_PLACEHOLDER,
+)
+
 def rank0_print(*args):
     import os
     local_rank = int(os.environ.get("LOCAL_RANK", 0))
@@ -133,32 +141,82 @@ class CustomDataset(Dataset):
 
     def __getitem__(self, index):
         line = self.questions[index]
-        image_file = line["image"]
-        print("type(image_files): ", type(image_file), "image_file: ", image_file)
-        qs = line["text"]
-        if self.model_config.mm_use_im_start_end:
-            qs = DEFAULT_IM_START_TOKEN + DEFAULT_IMAGE_TOKEN + DEFAULT_IM_END_TOKEN + '\n' + qs
+        image_files = line.get("images")
+        #print("type(image_files): ", type(image_files), "image_file: ", image_files)
+        if image_files is None:
+            image_file = line.get("image")
+            image_files = [image_file] if image_file is not None and str(image_file).strip() != "" else []
         else:
-            qs = DEFAULT_IMAGE_TOKEN + '\n' + qs
+            image_files = [image_file for image_file in image_files if image_file is not None and str(image_file).strip() != ""]
+        has_image = len(image_files) > 0
+        qs = line["text"]
+        
+        if has_image:
+            replace_token = DEFAULT_IMAGE_TOKEN
+            if self.model_config.mm_use_im_start_end:
+                replace_token = DEFAULT_IM_START_TOKEN + DEFAULT_IMAGE_TOKEN + DEFAULT_IM_END_TOKEN
+
+            if IMAGE_PLACEHOLDER in qs:
+                if qs.count(IMAGE_PLACEHOLDER) != len(image_files):
+                    raise ValueError(
+                        f"Question {line.get('question_id')} has {len(image_files)} images but "
+                        f"{qs.count(IMAGE_PLACEHOLDER)} image placeholders."
+                    )
+                qs = qs.replace(IMAGE_PLACEHOLDER, replace_token)
+            elif DEFAULT_IMAGE_TOKEN in qs:
+                if qs.count(DEFAULT_IMAGE_TOKEN) != len(image_files):
+                    raise ValueError(
+                        f"Question {line.get('question_id')} has {len(image_files)} images but "
+                        f"{qs.count(DEFAULT_IMAGE_TOKEN)} <image> tokens."
+                    )
+                if self.model_config.mm_use_im_start_end:
+                    qs = qs.replace(DEFAULT_IMAGE_TOKEN, replace_token)
+            else:
+                qs = "\n".join([replace_token] * len(image_files)) + '\n' + qs
+
 
         conv = conv_templates[args.conv_mode].copy()
         conv.append_message(conv.roles[0], qs)
         conv.append_message(conv.roles[1], None)
         prompt = conv.get_prompt()
         
-        image_tensor_clip = None
-        image_tensor_dino = None
-        path = os.path.join(self.image_folder, image_file)
-        assert os.path.exists(path), f"Image file not found: {path}"
-        image = Image.open(os.path.join(self.image_folder, image_file)).convert('RGB')
-        if self.image_processor_clip is not None:
-            # rank0_print("\n processing image with CLIP processor")
-            image_tensor_clip = process_images([image],self.image_processor_clip, self.model_config)[0]
-        if self.image_processor_dino is not None:
-            # rank0_print("\n processing image with DINO processor")
-            image_tensor_dino = process_images([image],self.image_processor_dino, self.model_config)[0]
+        if has_image:
+            resolved_paths = [
+                image_file if os.path.isabs(image_file) else os.path.join(self.image_folder, image_file)
+                for image_file in image_files
+            ]
+            images = []
+            for image_path in resolved_paths:
+                try:
+                    with Image.open(image_path) as image:
+                        images.append(image.convert('RGB'))
+                except Exception as exc:
+                    raise OSError(
+                        f"Failed to load image '{image_path}' for question_id={line.get('question_id')}: {exc}"
+                    ) from exc
+            
+            image_tensor_clip = None
+            image_tensor_dino = None
+            path = os.path.join(self.image_folder, image_file)
+            assert os.path.exists(path), f"Image file not found: {path}"
+            image = Image.open(os.path.join(self.image_folder, image_file)).convert('RGB')
+            if self.image_processor_clip is not None:
+                # rank0_print("\n processing image with CLIP processor")
+                image_tensor_clip = process_images(images,self.image_processor_clip, self.model_config) #[0]
+            if self.image_processor_dino is not None:
+                # rank0_print("\n processing image with DINO processor")
+                image_tensor_dino = process_images(images, self.image_processor_dino, self.model_config) #[0]
 
-        input_ids = tokenizer_image_token(prompt, self.tokenizer, IMAGE_TOKEN_INDEX, return_tensors='pt')
+            input_ids = tokenizer_image_token(prompt, self.tokenizer, IMAGE_TOKEN_INDEX, return_tensors='pt')
+            
+            # image_tensor = process_images(images, self.image_processor, self.model_config)
+            # image_sizes = [image.size for image in images]
+            # input_ids = tokenizer_image_token(prompt, self.tokenizer, IMAGE_TOKEN_INDEX, return_tensors='pt')
+        else:
+            image_tensor_clip = None
+            image_tensor_dino = None
+            input_ids = self.tokenizer(prompt, return_tensors='pt').input_ids[0]
+
         """
         prompt :  A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions. USER: <image>
         What is the brand of this camera?
@@ -569,6 +627,60 @@ def merge_chunks_and_plot(args):
     rank0_print(f"[merge] saved merged masks to: {merged_out}")
 
 
+def _extract_router_metadata(model, router_name: str, batch_index: int = 0) -> dict:
+    """Read the latest routing decision from router_dino or router_clip and return a JSON-serializable dict."""
+    router = None
+    decision_attr = None
+    if "dino" in router_name and hasattr(model, "router_dino"):
+        router = model.router_dino
+        decision_attr = "_latest_routing_decision_dino"
+    elif "clip" in router_name and hasattr(model, "router_clip"):
+        router = model.router_clip
+        decision_attr = "_latest_routing_decision_clip"
+    if router is None or decision_attr is None:
+        return {}
+
+    payload = getattr(router, decision_attr, None)
+    if not payload:
+        return {}
+
+    layers = payload.get("layers")
+    probs = payload.get("probs")
+    if layers is None or probs is None or batch_index >= layers.shape[0]:
+        return {}
+
+    sample_layers = layers[batch_index].to(torch.int64)
+    sample_probs = probs[batch_index].to(torch.float32)
+    num_layers_available = payload.get("num_layers_available")
+
+    flat = sample_layers.reshape(-1)
+    counts = torch.bincount(flat, minlength=num_layers_available or int(flat.max().item()) + 1)
+    layer_counts = {str(i): int(c) for i, c in enumerate(counts) if int(c) > 0}
+    total = sum(layer_counts.values()) or 1
+    layer_freq = {k: v / total for k, v in layer_counts.items()}
+    # import pdb; pdb.set_trace()
+    metadata = {
+        "selection_mode": payload.get("selection_mode", "image_level"),
+        "num_layers_available": num_layers_available,
+        "num_layers_to_choose": payload.get("num_layers_to_choose"),
+        "selected_layers": sample_layers.tolist(),
+        "selected_layer_counts": layer_counts,
+        "selected_layer_frequency": layer_freq,
+        "selected_layer_probs": sample_probs.detach().cpu().tolist(),
+    }
+
+    reserve_layer_index = payload.get("reserve_layer_index")
+    if reserve_layer_index is not None:
+        metadata["reserve_layer_index"] = int(reserve_layer_index)
+
+    reserve_layer_prob = payload.get("reserve_layer_prob")
+    if reserve_layer_prob is not None and batch_index < reserve_layer_prob.shape[0]:
+        s = reserve_layer_prob[batch_index].to(torch.float32)
+        metadata["reserve_layer_prob"] = float(s.item()) if s.ndim == 0 else float(s.mean().item())
+
+    return {"router": metadata}
+
+
 def eval_model(args):
     rank0_print("args.use_router:", args.use_router)
     disable_torch_init()
@@ -675,6 +787,7 @@ def eval_model(args):
             )
 
         outputs = tokenizer.batch_decode(output_ids, skip_special_tokens=True)[0].strip()
+        metadata = _extract_router_metadata(model, router_name)
 
         ans_id = shortuuid.uuid()
         ans_file.write(json.dumps({
@@ -683,7 +796,7 @@ def eval_model(args):
             "text": outputs,
             "answer_id": ans_id,
             "model_id": model_name,
-            "metadata": {}
+            "metadata": metadata
         }) + "\n")
 
     ans_file.close()
@@ -794,7 +907,7 @@ if __name__ == "__main__":
     parser.add_argument("--text_conditioning", type=str, default="attention", help="How to condition on text features for routing when using text enc. Options: film, attention.")
     parser.add_argument("--text_attention_type", type=str, default="qk", help="How to merge features when using text attention conditioning. Options: concat (concatenate text and vision features before routing), qk (use text features to compute query/key for attention over vision features).")
     parser.add_argument("--text_attention_dim", type=int, default=1024, help="Dim of text attention")
-    parser.add_argument("--attn_level", type=str, default="token", help="Used when text_conditiong is attention. Options: token or layer.")
+    parser.add_argument("--attn_level", type=str, default="token", help="Used when text_conditiong is attention. Options: token, layer,  patch_layer, or hybrid.")
     parser.add_argument("--force_reserve_layer", type=bool, default=True, help="Use reserve layer or not.")
     parser.add_argument("--reserve_layer", type=int, default=-2, help="The reserve layer index. Only used if force_reserve_layer is True. This layer will always be selected as the expert, and the router will choose (num_layers_to_choose - 1) experts from the remaining layers.")
     parser.add_argument("--learnable_gate", type=bool, default=True, help="Use the learnable gate for the weighting of the image encoder features.")

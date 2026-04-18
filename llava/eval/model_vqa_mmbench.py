@@ -316,6 +316,7 @@ def eval_model(args):
                     images=image_tensor_clip.unsqueeze(0).half().cuda() if image_tensor_clip is not None else None,
                     dino_images=image_tensor_dino.unsqueeze(0).half().cuda() if image_tensor_dino is not None else None,
                     image_sizes=[image.size],
+                    clip_texts=[prompt],
                     do_sample=True if args.temperature > 0 else False,
                     temperature=args.temperature,
                     top_p=args.top_p,
@@ -326,6 +327,7 @@ def eval_model(args):
                     encoder_type=args.encoder_type,)
 
             outputs = tokenizer.batch_decode(output_ids, skip_special_tokens=True)[0].strip()
+            # metadata = get_router_selection_metadata(model)
 
             ans_id = shortuuid.uuid()
             ans_file.write(json.dumps({"question_id": idx,
@@ -336,7 +338,7 @@ def eval_model(args):
                                     "option_char": cur_option_char,
                                     "answer_id": ans_id,
                                     "model_id": model_name,
-                                    "metadata": {}}) + "\n")
+                                    "metadata": {} }) + "\n")#metadata}) + "\n")
             ans_file.flush()
 
             # rotate options

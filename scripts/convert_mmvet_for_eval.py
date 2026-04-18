@@ -1,4 +1,3 @@
-import os
 import json
 import argparse
 
@@ -11,8 +10,10 @@ cur_result = {}
 
 for line in open(args.src):
     data = json.loads(line)
-    qid = data['question_id']
-    cur_result[f'v1_{qid}'] = data['text']
+    qid = str(data["question_id"]).strip()
+    if not qid.startswith("v1_"):
+        qid = f"v1_{qid}"
+    cur_result[qid] = data["text"]
 
-with open(args.dst, 'w') as f:
+with open(args.dst, "w") as f:
     json.dump(cur_result, f, indent=2)

@@ -271,7 +271,11 @@ class LlavaMetaForCausalLM(ABC):
     
     def encode_images(self, images):
         image_features = self.get_model().get_vision_tower()(images) # image_features.requires_grad = False <-- this is why gradients are zero for scaling coefs
-        assert image_features.requires_grad == True
+        if self.training and torch.is_grad_enabled() and not image_features.requires_grad:
+            raise RuntimeError(
+                "image_features.requires_grad=False during training. "
+                "This blocks gradients to trainable vision-tower params (e.g., scaling_coef)."
+            )
         # import pdb; pdb.set_trace()
         image_features = self.get_model().mm_projector(image_features) # image_features.requires_grad = True
         return image_features
