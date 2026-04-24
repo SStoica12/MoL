@@ -7,7 +7,7 @@ cd "${REPO_ROOT}"
 
 CHECKPOINT_ROOT="/shared/nas2/jk100/MoL/checkpoints"
 MODEL_PATHS=(
-    "liuhaotian/llava-v1.5-13b"
+    # "liuhaotian/llava-v1.5-13b"
     # "${CHECKPOINT_ROOT}/llava-v1.5-13b-moe-finetune_2e-4_router_learnable-gate_scaled-residual"
     # "${CHECKPOINT_ROOT}/llava-v1.5-13b-moe-finetune_2e-4_text-cond-attn-layer-router_learnable-gate_scaled-residual"
     # "${CHECKPOINT_ROOT}/llava-v1.5-13b-moe-finetune_2e-4_text-cond-attn-token-router_learnable-gate_scaled-residual"
@@ -19,10 +19,13 @@ MODEL_PATHS=(
     # "${CHECKPOINT_ROOT}/llava-v1.5-13b-moe-finetune_text-cond-attn-patchlayer-router_learnable-gate_lr1e-5-pretrain_lr2e-5-finetune_no-delta"
     # "${CHECKPOINT_ROOT}/llava-v1.5-13b-moe-finetune_text-cond-attn-patchlayer-router_learnable-gate_lr1e-5-pretrain_lr2e-5-finetune_k2_no-delta"
     # "${CHECKPOINT_ROOT}/llava-v1.5-13b-moe-finetune_text-cond-attn-patchlayer-router_learnable-gate_lr1e-5-pretrain_lr2e-5-finetune_k4_no-delta"
-    "${CHECKPOINT_ROOT}/llava-v1.5-13b-moe-finetune_text-cond-attn-hybrid-router_learnable-gate_lr1e-5-pretrain_lr2e-5-finetune_no-delta"
-    "${CHECKPOINT_ROOT}/llava-v1.5-13b-moe-finetune_text-cond-attn-hybrid-router_learnable-gate_lr1e-5-pretrain_lr2e-5-finetune_k2_no-delta"
-    "${CHECKPOINT_ROOT}/llava-v1.5-13b-moe-finetune_text-cond-attn-hybrid-router_learnable-gate_lr1e-5-pretrain_lr2e-5-finetune_k4_no-delta"
-    "${CHECKPOINT_ROOT}/llava-v1.5-13b-moe-finetune_text-cond-attn-hybrid-router_lr1e-5-pretrain_lr2e-5-finetune_no_reserve"
+    # "${CHECKPOINT_ROOT}/llava-v1.5-13b-moe-finetune_text-cond-attn-hybrid-router_learnable-gate_lr1e-5-pretrain_lr2e-5-finetune_no-delta"
+    # "${CHECKPOINT_ROOT}/llava-v1.5-13b-moe-finetune_text-cond-attn-hybrid-router_learnable-gate_lr1e-5-pretrain_lr2e-5-finetune_k2_no-delta"
+    # "${CHECKPOINT_ROOT}/llava-v1.5-13b-moe-finetune_text-cond-attn-hybrid-router_learnable-gate_lr1e-5-pretrain_lr2e-5-finetune_k4_no-delta"
+    # "${CHECKPOINT_ROOT}/llava-v1.5-13b-moe-finetune_text-cond-attn-hybrid-router_disagreement-gate_lr1e-5-pretrain_lr2e-5-finetune"
+    "${CHECKPOINT_ROOT}/llava-v1.5-13b-moe-finetune_text-cond-attn-hybrid-router_disagreement-gate_lr1e-5-pretrain_lr2e-5-finetune_k2"
+    # "${CHECKPOINT_ROOT}/llava-v1.5-13b-moe-finetune_text-cond-attn-hybrid-router_disagreement-gate_lr1e-5-pretrain_lr2e-5-finetune_k4"
+    # "${CHECKPOINT_ROOT}/llava-v1.5-13b-moe-finetune_text-cond-attn-hybrid-router_lr1e-5-pretrain_lr2e-5-finetune_no_reserve"
 )
 
 declare -a FAILURES=()
@@ -230,37 +233,44 @@ run_model_loop() {
 }
 
 # These scripts already contain the same batch-model loop internally.
-# run_existing_script "docvqa.sh"
+run_existing_script "naturalbench.sh"
+run_existing_script "docvqa.sh"
+run_existing_script "cvbench.sh"
 run_existing_script "mmstar.sh"
 run_existing_script "mmvp.sh"
 run_existing_script "mmvet.sh"
 run_existing_script "vstar.sh"
 run_existing_script "hallusionbench.sh"
+run_existing_script "docvqa.sh"
+run_existing_script "charxiv.sh"
+run_existing_script "visualoverload.sh"
 run_existing_script "realworldqa.sh"
 run_existing_script "hrbench4k.sh"
 run_existing_script "hrbench8k.sh"
+run_existing_script "naturalbench.sh"
 run_existing_script "mme_realworld.sh"
 run_existing_script "mmmu.sh"
 run_existing_script "mmbench.sh"
 run_existing_script "pope.sh"
 run_existing_script "chartqa.sh"
-run_existing_script "llavabench.sh"
+run_existing_script "countbenchqa.sh"
 run_existing_script "docvqa.sh"
 run_existing_script "gqa.sh"
 run_existing_script "textvqa.sh"
-run_existing_script "mme.sh"
-run_existing_script "seed.sh"
-run_existing_script "vizwiz.sh"
-run_existing_script "vqav2.sh"
-run_existing_script "dtd.sh"
+# run_existing_script "llavabench.sh"
+# run_existing_script "mme.sh"
+# run_existing_script "seed.sh"
+# run_existing_script "vizwiz.sh"
+# run_existing_script "vqav2.sh"
+# run_existing_script "dtd.sh"
 
 # These launchers are single-model scripts, so apply the shared MODEL_PATHS here.
-run_model_loop "mmbench_cn" run_mmbench_cn_for_model
-run_model_loop "qbench-dev" run_qbench_for_model dev
-run_model_loop "qbench-test" run_qbench_for_model test
-run_model_loop "qbench_zh-dev" run_qbench_zh_for_model dev
-run_model_loop "qbench_zh-test" run_qbench_zh_for_model test
-run_model_loop "sqa" run_sqa_for_model
+# run_model_loop "mmbench_cn" run_mmbench_cn_for_model
+# run_model_loop "qbench-dev" run_qbench_for_model dev
+# run_model_loop "qbench-test" run_qbench_for_model test
+# run_model_loop "qbench_zh-dev" run_qbench_zh_for_model dev
+# run_model_loop "qbench_zh-test" run_qbench_zh_for_model test
+# run_model_loop "sqa" run_sqa_for_model
 
 echo
 echo "============================================================"

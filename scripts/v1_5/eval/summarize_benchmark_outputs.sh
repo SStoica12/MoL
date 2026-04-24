@@ -41,6 +41,17 @@ MMBENCH_QUESTION_FILE="${MMBENCH_QUESTION_FILE:-${MMBENCH_ROOT}/${MMBENCH_SPLIT}
 SEED_ROOT="${SEED_ROOT:-./playground/data/eval/seed_bench}"
 SEED_OUT_ROOT="${SEED_OUT_ROOT:-./playground/data/eval/seed_bench_out}"
 SEED_ANNOTATION_FILE="${SEED_ANNOTATION_FILE:-${SEED_ROOT}/SEED-Bench.json}"
+if [[ ! -f "${SEED_ANNOTATION_FILE}" ]]; then
+    for candidate in \
+        "${SEED_ROOT}/SEED-Bench_v1_level1_2_3.json" \
+        "${SEED_ROOT}/SEED-Bench_v2_level1_2_3.json" \
+        "${SEED_ROOT}/SEED-Bench-2/SEED-Bench_v2_level1_2_3.json"; do
+        if [[ -f "${candidate}" ]]; then
+            SEED_ANNOTATION_FILE="${candidate}"
+            break
+        fi
+    done
+fi
 
 # POPE
 POPE_ROOT="${POPE_ROOT:-./playground/data/eval/pope}"
@@ -89,6 +100,13 @@ CHARTQA_OUT_ROOT="${CHARTQA_OUT_ROOT:-${CHARTQA_ROOT}/answers/${CHARTQA_SPLIT}}"
 CHARTQA_QUESTION_FILE="${CHARTQA_QUESTION_FILE:-${CHARTQA_ROOT}/${CHARTQA_SPLIT}.jsonl}"
 CHARTQA_EVAL_SCRIPT="${CHARTQA_EVAL_SCRIPT:-llava/eval/eval_chartqa.py}"
 
+# CountBenchQA
+COUNTBENCHQA_ROOT="${COUNTBENCHQA_ROOT:-./playground/data/eval/CountBenchQA}"
+COUNTBENCHQA_SPLIT="${COUNTBENCHQA_SPLIT:-test}"
+COUNTBENCHQA_OUT_ROOT="${COUNTBENCHQA_OUT_ROOT:-${COUNTBENCHQA_ROOT}/answers/${COUNTBENCHQA_SPLIT}}"
+COUNTBENCHQA_QUESTION_FILE="${COUNTBENCHQA_QUESTION_FILE:-${COUNTBENCHQA_ROOT}/${COUNTBENCHQA_SPLIT}.jsonl}"
+COUNTBENCHQA_EVAL_SCRIPT="${COUNTBENCHQA_EVAL_SCRIPT:-llava/eval/eval_countbenchqa.py}"
+
 # HRBench4K
 HRBENCH4K_ROOT="${HRBENCH4K_ROOT:-./playground/data/eval/HRBench4K}"
 HRBENCH4K_OUT_ROOT="${HRBENCH4K_OUT_ROOT:-${HRBENCH4K_ROOT}/answers}"
@@ -124,6 +142,43 @@ MMVP_OUT_ROOT="${MMVP_OUT_ROOT:-${MMVP_ROOT}/answers}"
 MMVP_QUESTION_FILE="${MMVP_QUESTION_FILE:-${MMVP_ROOT}/questions.jsonl}"
 MMVP_EVAL_SCRIPT="${MMVP_EVAL_SCRIPT:-llava/eval/eval_mmvp.py}"
 
+# CV-Bench
+CVBENCH_ROOT="${CVBENCH_ROOT:-./playground/data/eval/CVBench}"
+CVBENCH_SPLIT="${CVBENCH_SPLIT:-test}"
+CVBENCH_CONFIG_NAME="${CVBENCH_CONFIG_NAME:-default}"
+if [[ "${CVBENCH_CONFIG_NAME}" == "default" ]]; then
+    CVBENCH_OUT_ROOT="${CVBENCH_OUT_ROOT:-${CVBENCH_ROOT}/answers/${CVBENCH_SPLIT}}"
+    CVBENCH_QUESTION_FILE="${CVBENCH_QUESTION_FILE:-${CVBENCH_ROOT}/${CVBENCH_SPLIT}.jsonl}"
+else
+    CVBENCH_OUT_ROOT="${CVBENCH_OUT_ROOT:-${CVBENCH_ROOT}/answers/${CVBENCH_CONFIG_NAME}/${CVBENCH_SPLIT}}"
+    CVBENCH_QUESTION_FILE="${CVBENCH_QUESTION_FILE:-${CVBENCH_ROOT}/${CVBENCH_CONFIG_NAME}_${CVBENCH_SPLIT}.jsonl}"
+fi
+CVBENCH_EVAL_SCRIPT="${CVBENCH_EVAL_SCRIPT:-llava/eval/eval_cvbench.py}"
+
+# NaturalBench
+NATURALBENCH_ROOT="${NATURALBENCH_ROOT:-./playground/data/eval/NaturalBench}"
+NATURALBENCH_SPLIT="${NATURALBENCH_SPLIT:-train}"
+NATURALBENCH_OUT_ROOT="${NATURALBENCH_OUT_ROOT:-${NATURALBENCH_ROOT}/answers/${NATURALBENCH_SPLIT}}"
+NATURALBENCH_QUESTION_FILE="${NATURALBENCH_QUESTION_FILE:-${NATURALBENCH_ROOT}/${NATURALBENCH_SPLIT}.jsonl}"
+NATURALBENCH_EVAL_SCRIPT="${NATURALBENCH_EVAL_SCRIPT:-llava/eval/eval_naturalbench.py}"
+
+# CharXiv
+CHARXIV_ROOT="${CHARXIV_ROOT:-./playground/data/eval/CharXiv}"
+CHARXIV_SPLIT="${CHARXIV_SPLIT:-validation}"
+CHARXIV_OUT_ROOT="${CHARXIV_OUT_ROOT:-${CHARXIV_ROOT}/answers/${CHARXIV_SPLIT}}"
+CHARXIV_QUESTION_FILE="${CHARXIV_QUESTION_FILE:-${CHARXIV_ROOT}/${CHARXIV_SPLIT}.jsonl}"
+CHARXIV_EVAL_SCRIPT="${CHARXIV_EVAL_SCRIPT:-llava/eval/eval_charxiv.py}"
+CHARXIV_JUDGE_MODEL="${CHARXIV_JUDGE_MODEL:-${JUDGE_MODEL:-}}"
+CHARXIV_JUDGE_API_KEY="${CHARXIV_JUDGE_API_KEY:-${OPENAI_API_KEY:-}}"
+CHARXIV_JUDGE_BASE_URL="${CHARXIV_JUDGE_BASE_URL:-${OPENAI_BASE_URL:-${OPENAI_API_BASE:-}}}"
+
+# VisualOverload
+VISUALOVERLOAD_ROOT="${VISUALOVERLOAD_ROOT:-./playground/data/eval/VisualOverload}"
+VISUALOVERLOAD_SPLIT="${VISUALOVERLOAD_SPLIT:-test}"
+VISUALOVERLOAD_OUT_ROOT="${VISUALOVERLOAD_OUT_ROOT:-${VISUALOVERLOAD_ROOT}/answers/${VISUALOVERLOAD_SPLIT}}"
+VISUALOVERLOAD_QUESTION_FILE="${VISUALOVERLOAD_QUESTION_FILE:-${VISUALOVERLOAD_ROOT}/${VISUALOVERLOAD_SPLIT}.jsonl}"
+VISUALOVERLOAD_EVAL_SCRIPT="${VISUALOVERLOAD_EVAL_SCRIPT:-llava/eval/eval_visualoverload.py}"
+
 # V*Bench
 VSTAR_ROOT="${VSTAR_ROOT:-./playground/data/eval/vstar_bench}"
 VSTAR_OUT_ROOT="${VSTAR_OUT_ROOT:-${VSTAR_ROOT}/answers}"
@@ -137,7 +192,7 @@ DTD_OUT_ROOT="${DTD_OUT_ROOT:-${DTD_ROOT}/answers/${DTD_RUN_NAME}}"
 DTD_QUESTION_FILE="${DTD_QUESTION_FILE:-${DTD_OUT_ROOT}/questions.jsonl}"
 DTD_EVAL_SCRIPT="${DTD_EVAL_SCRIPT:-llava/eval/eval_dtd.py}"
 
-ALL_BENCHMARKS=(mmbench gqa seed pope textvqa mme vizwiz vqav2 hallusionbench realworldqa chartqa hrbench4k hrbench8k mmstar mmvet mmvp vstar dtd)
+ALL_BENCHMARKS=(mmbench gqa seed pope textvqa mme vizwiz vqav2 hallusionbench realworldqa chartqa countbenchqa hrbench4k hrbench8k mmstar mmvet mmvp cvbench naturalbench charxiv visualoverload vstar dtd)
 
 success_count=0
 skip_count=0
@@ -151,10 +206,10 @@ Usage:
 Examples:
   bash scripts/v1_5/eval/summarize_benchmark_outputs.sh all
   bash scripts/v1_5/eval/summarize_benchmark_outputs.sh gqa
-  bash scripts/v1_5/eval/summarize_benchmark_outputs.sh mmbench gqa seed hallusionbench realworldqa chartqa hrbench4k hrbench8k mmstar mmvet mmvp vstar dtd
+  bash scripts/v1_5/eval/summarize_benchmark_outputs.sh mmbench gqa seed hallusionbench realworldqa chartqa countbenchqa hrbench4k hrbench8k mmstar mmvet mmvp cvbench naturalbench charxiv visualoverload vstar dtd
 
 Benchmarks:
-  mmbench gqa seed pope textvqa mme vizwiz vqav2 hallusionbench realworldqa chartqa hrbench4k hrbench8k mmstar mmvet mmvp vstar dtd
+  mmbench gqa seed pope textvqa mme vizwiz vqav2 hallusionbench realworldqa chartqa countbenchqa hrbench4k hrbench8k mmstar mmvet mmvp cvbench naturalbench charxiv visualoverload vstar dtd
 
 Notes:
   - This script does NOT run inference. It only reads existing result jsonl files.
@@ -165,11 +220,16 @@ Notes:
   - HallusionBench expects ${HALLUSIONBENCH_QUESTION_FILE} to exist.
   - RealWorldQA expects ${REALWORLDQA_QUESTION_FILE} to exist.
   - ChartQA expects ${CHARTQA_QUESTION_FILE} to exist.
+  - CountBenchQA expects ${COUNTBENCHQA_QUESTION_FILE} to exist.
   - HRBench4K expects ${HRBENCH4K_QUESTION_FILE} to exist.
   - HRBench8K expects ${HRBENCH8K_QUESTION_FILE} to exist.
   - MMStar expects ${MMSTAR_QUESTION_FILE} to exist.
   - MMVet expects ${MMVET_ANNOTATION_FILE} to exist or judge-free summaries will remain incomplete.
   - MMVP expects ${MMVP_QUESTION_FILE} to exist.
+  - CV-Bench expects ${CVBENCH_QUESTION_FILE} to exist.
+  - NaturalBench expects ${NATURALBENCH_QUESTION_FILE} to exist.
+  - CharXiv expects ${CHARXIV_QUESTION_FILE} to exist.
+  - VisualOverload expects ${VISUALOVERLOAD_QUESTION_FILE} to exist and produces submission.json instead of a local accuracy score.
   - V*Bench expects ${VSTAR_QUESTION_FILE} to exist.
   - DTD expects ${DTD_QUESTION_FILE} to exist. Override DTD_RUN_NAME/DTD_OUT_ROOT for non-default runs.
 EOF
@@ -271,10 +331,11 @@ summarize_seed() {
             --dataset seed
             --result-file "${result_file}"
             --output-file "${ckpt_dir}/summary.json"
-            --detail-file "${ckpt_dir}/details.jsonl"
         )
-        if [[ -n "${SEED_ANNOTATION_FILE}" ]]; then
-            args+=(--annotation-file "${SEED_ANNOTATION_FILE}")
+        if [[ -n "${SEED_ANNOTATION_FILE}" && -f "${SEED_ANNOTATION_FILE}" ]]; then
+            args+=(--annotation-file "${SEED_ANNOTATION_FILE}" --detail-file "${ckpt_dir}/details.jsonl")
+        else
+            log "seed $(basename "${ckpt_dir}"): annotation file not found; writing inference-only summary"
         fi
 
         run_summary_cmd "seed $(basename "${ckpt_dir}")" "${args[@]}"
@@ -479,6 +540,28 @@ summarize_chartqa() {
     done < <(find "${answer_dir}" -type f -name 'predictions.jsonl' -print0 | sort -z)
 }
 
+summarize_countbenchqa() {
+    local answer_dir="${COUNTBENCHQA_OUT_ROOT}"
+    if [[ ! -d "${answer_dir}" ]]; then
+        log "SKIP countbenchqa: ${answer_dir} not found"
+        skip_count=$((skip_count + 1))
+        return
+    fi
+    ensure_required_file "${COUNTBENCHQA_QUESTION_FILE}" "countbenchqa" || return
+
+    while IFS= read -r -d '' result_file; do
+        local ckpt_dir
+        ckpt_dir="$(dirname "${result_file}")"
+        run_python_script \
+            "countbenchqa $(basename "${ckpt_dir}")" \
+            "${COUNTBENCHQA_EVAL_SCRIPT}" \
+            --question-file "${COUNTBENCHQA_QUESTION_FILE}" \
+            --result-file "${result_file}" \
+            --output-file "${ckpt_dir}/summary.json" \
+            --detail-file "${ckpt_dir}/details.jsonl"
+    done < <(find "${answer_dir}" -type f -name 'predictions.jsonl' -print0 | sort -z)
+}
+
 summarize_hrbench4k() {
     local answer_dir="${HRBENCH4K_OUT_ROOT}"
     if [[ ! -d "${answer_dir}" ]]; then
@@ -607,6 +690,110 @@ summarize_mmvp() {
     done < <(find "${answer_dir}" -type f -name 'predictions.jsonl' -print0 | sort -z)
 }
 
+summarize_cvbench() {
+    local answer_dir="${CVBENCH_OUT_ROOT}"
+    if [[ ! -d "${answer_dir}" ]]; then
+        log "SKIP cvbench: ${answer_dir} not found"
+        skip_count=$((skip_count + 1))
+        return
+    fi
+    ensure_required_file "${CVBENCH_QUESTION_FILE}" "cvbench" || return
+
+    while IFS= read -r -d '' result_file; do
+        local ckpt_dir
+        ckpt_dir="$(dirname "${result_file}")"
+        run_python_script \
+            "cvbench $(basename "${ckpt_dir}")" \
+            "${CVBENCH_EVAL_SCRIPT}" \
+            --question-file "${CVBENCH_QUESTION_FILE}" \
+            --result-file "${result_file}" \
+            --output-file "${ckpt_dir}/summary.json" \
+            --detail-file "${ckpt_dir}/details.jsonl"
+    done < <(find "${answer_dir}" -type f -name 'predictions.jsonl' -print0 | sort -z)
+}
+
+summarize_naturalbench() {
+    local answer_dir="${NATURALBENCH_OUT_ROOT}"
+    if [[ ! -d "${answer_dir}" ]]; then
+        log "SKIP naturalbench: ${answer_dir} not found"
+        skip_count=$((skip_count + 1))
+        return
+    fi
+    ensure_required_file "${NATURALBENCH_QUESTION_FILE}" "naturalbench" || return
+
+    while IFS= read -r -d '' result_file; do
+        local ckpt_dir
+        ckpt_dir="$(dirname "${result_file}")"
+        run_python_script \
+            "naturalbench $(basename "${ckpt_dir}")" \
+            "${NATURALBENCH_EVAL_SCRIPT}" \
+            --question-file "${NATURALBENCH_QUESTION_FILE}" \
+            --result-file "${result_file}" \
+            --output-file "${ckpt_dir}/summary.json" \
+            --detail-file "${ckpt_dir}/details.jsonl"
+    done < <(find "${answer_dir}" -type f -name 'predictions.jsonl' -print0 | sort -z)
+}
+
+summarize_charxiv() {
+    local answer_dir="${CHARXIV_OUT_ROOT}"
+    if [[ ! -d "${answer_dir}" ]]; then
+        log "SKIP charxiv: ${answer_dir} not found"
+        skip_count=$((skip_count + 1))
+        return
+    fi
+    ensure_required_file "${CHARXIV_QUESTION_FILE}" "charxiv" || return
+
+    while IFS= read -r -d '' result_file; do
+        local ckpt_dir
+        local -a args
+        ckpt_dir="$(dirname "${result_file}")"
+        args=(
+            --question-file "${CHARXIV_QUESTION_FILE}"
+            --result-file "${result_file}"
+            --grade-file "${ckpt_dir}/grades.json"
+            --output-file "${ckpt_dir}/summary.json"
+            --detail-file "${ckpt_dir}/details.jsonl"
+        )
+        if [[ -n "${CHARXIV_JUDGE_MODEL}" ]]; then
+            args+=(--judge-model "${CHARXIV_JUDGE_MODEL}")
+        fi
+        if [[ -n "${CHARXIV_JUDGE_API_KEY}" ]]; then
+            args+=(--judge-api-key "${CHARXIV_JUDGE_API_KEY}")
+        fi
+        if [[ -n "${CHARXIV_JUDGE_BASE_URL}" ]]; then
+            args+=(--judge-base-url "${CHARXIV_JUDGE_BASE_URL}")
+        fi
+
+        run_python_script \
+            "charxiv $(basename "${ckpt_dir}")" \
+            "${CHARXIV_EVAL_SCRIPT}" \
+            "${args[@]}"
+    done < <(find "${answer_dir}" -type f -name 'predictions.jsonl' -print0 | sort -z)
+}
+
+summarize_visualoverload() {
+    local answer_dir="${VISUALOVERLOAD_OUT_ROOT}"
+    if [[ ! -d "${answer_dir}" ]]; then
+        log "SKIP visualoverload: ${answer_dir} not found"
+        skip_count=$((skip_count + 1))
+        return
+    fi
+    ensure_required_file "${VISUALOVERLOAD_QUESTION_FILE}" "visualoverload" || return
+
+    while IFS= read -r -d '' result_file; do
+        local ckpt_dir
+        ckpt_dir="$(dirname "${result_file}")"
+        run_python_script \
+            "visualoverload $(basename "${ckpt_dir}")" \
+            "${VISUALOVERLOAD_EVAL_SCRIPT}" \
+            --question-file "${VISUALOVERLOAD_QUESTION_FILE}" \
+            --result-file "${result_file}" \
+            --output-file "${ckpt_dir}/summary.json" \
+            --detail-file "${ckpt_dir}/details.jsonl" \
+            --submission-file "${ckpt_dir}/submission.json"
+    done < <(find "${answer_dir}" -type f -name 'predictions.jsonl' -print0 | sort -z)
+}
+
 summarize_vstar() {
     local answer_dir="${VSTAR_OUT_ROOT}"
     if [[ ! -d "${answer_dir}" ]]; then
@@ -665,11 +852,16 @@ run_one_benchmark() {
         hallusionbench) summarize_hallusionbench ;;
         realworldqa) summarize_realworldqa ;;
         chartqa) summarize_chartqa ;;
+        countbenchqa) summarize_countbenchqa ;;
         hrbench4k) summarize_hrbench4k ;;
         hrbench8k) summarize_hrbench8k ;;
         mmstar) summarize_mmstar ;;
         mmvet) summarize_mmvet ;;
         mmvp) summarize_mmvp ;;
+        cvbench) summarize_cvbench ;;
+        naturalbench) summarize_naturalbench ;;
+        charxiv) summarize_charxiv ;;
+        visualoverload) summarize_visualoverload ;;
         vstar) summarize_vstar ;;
         dtd) summarize_dtd ;;
         *)

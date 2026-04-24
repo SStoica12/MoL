@@ -39,12 +39,13 @@ def get_chunk(lst, n, k):
 
 # Custom dataset class
 class CustomDataset(Dataset):
-    def __init__(self, questions, image_folder, tokenizer, image_processor, model_config):
+    def __init__(self, questions, image_folder, tokenizer, image_processor, model_config, conv_mode):
         self.questions = questions
         self.image_folder = image_folder
         self.tokenizer = tokenizer
         self.image_processor = image_processor
         self.model_config = model_config
+        self.conv_mode = conv_mode
 
     def __getitem__(self, index):
         line = self.questions[index]
@@ -79,7 +80,7 @@ class CustomDataset(Dataset):
             else:
                 qs = "\n".join([replace_token] * len(image_files)) + '\n' + qs
 
-        conv = conv_templates[args.conv_mode].copy()
+        conv = conv_templates[self.conv_mode].copy()
         conv.append_message(conv.roles[0], qs)
         conv.append_message(conv.roles[1], None)
         prompt = conv.get_prompt()
@@ -125,9 +126,25 @@ def collate_fn(batch):
 
 
 # DataLoader
-def create_data_loader(questions, image_folder, tokenizer, image_processor, model_config, batch_size=1, num_workers=4):
+def create_data_loader(
+    questions,
+    image_folder,
+    tokenizer,
+    image_processor,
+    model_config,
+    conv_mode,
+    batch_size=1,
+    num_workers=4,
+):
     assert batch_size == 1, "batch_size must be 1"
-    dataset = CustomDataset(questions, image_folder, tokenizer, image_processor, model_config)
+    dataset = CustomDataset(
+        questions,
+        image_folder,
+        tokenizer,
+        image_processor,
+        model_config,
+        conv_mode=conv_mode,
+    )
     data_loader = DataLoader(dataset, batch_size=batch_size, num_workers=num_workers, shuffle=False, collate_fn=collate_fn)
     return data_loader
 
@@ -149,7 +166,14 @@ def eval_model(args):
         args.conv_mode = args.conv_mode + '_mmtag'
         print(f'It seems that this is a plain model, but it is not using a mmtag prompt, auto switching to {args.conv_mode}.')
 
-    data_loader = create_data_loader(questions, args.image_folder, tokenizer, image_processor, model.config)
+    data_loader = create_data_loader(
+        questions,
+        args.image_folder,
+        tokenizer,
+        image_processor,
+        model.config,
+        conv_mode=args.conv_mode,
+    )
 
     for (input_ids, image_tensor, image_sizes, prompt), line in tqdm(zip(data_loader, questions), total=len(questions)):
         idx = line["question_id"]

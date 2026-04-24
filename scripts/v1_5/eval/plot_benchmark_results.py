@@ -16,7 +16,7 @@ How to run:
 
 $ python scripts/v1_5/eval/plot_benchmark_results.py \
   --eval-root playground/data/eval \
-  --benchmarks mmbench gqa seed pope textvqa docvqa mme mme_realworld vizwiz vqav2 hallusionbench realworldqa chartqa hrbench4k hrbench8k mmstar mmvet mmvp \
+  --benchmarks mmbench gqa seed pope textvqa docvqa mme mme_realworld vizwiz vqav2 hallusionbench realworldqa chartqa hrbench4k hrbench8k mmstar mmvet mmvp cvbench naturalbench charxiv \
   --output-dir playground/data/eval/plots \
   --include-overall \
   --max-categories-per-row 6 \
@@ -37,6 +37,9 @@ SUPPORTED_BENCHMARKS = [
     "mmstar",
     "mmvet",
     "mmvp",
+    "cvbench",
+    "naturalbench",
+    "charxiv",
     "gqa",
     "seed",
     "pope",
@@ -49,6 +52,7 @@ SUPPORTED_BENCHMARKS = [
     "hallusionbench",
     "realworldqa",
     "chartqa",
+    "countbenchqa",
     "hrbench4k",
     "hrbench8k",
     "vstar",
@@ -102,6 +106,9 @@ DEFAULT_MMMU_SUBJECTS = [
 DEFAULT_MMMU_QUESTION_TYPES = ["multiple_choice", "open"]
 
 BENCHMARK_DISPLAY_NAMES = {
+    "charxiv": "CharXiv",
+    "countbenchqa": "CountBenchQA",
+    "cvbench": "CV-Bench",
     "chartqa": "ChartQA",
     "docvqa": "DocVQA",
     "dtd": "DTD",
@@ -116,6 +123,7 @@ BENCHMARK_DISPLAY_NAMES = {
     "mmmu": "MMMU",
     "mme": "MME",
     "mme_realworld": "MME-RealWorld",
+    "naturalbench": "NaturalBench",
     "pope": "POPE",
     "realworldqa": "RealWorldQA",
     "seed": "SEED",
@@ -126,11 +134,17 @@ BENCHMARK_DISPLAY_NAMES = {
 }
 
 BENCHMARK_CATEGORY_ORDER = {
+    ("charxiv", "by_category"): ["descriptive", "reasoning"],
+    ("countbenchqa", "by_number"): [str(i) for i in range(2, 11)],
+    ("cvbench", "by_source"): ["ADE20K", "COCO", "Omni3D"],
+    ("cvbench", "by_type"): ["2D", "3D"],
     ("dtd", "by_split"): DEFAULT_DTD_CATEGORIES,
     ("hrbench4k", "by_category"): DEFAULT_HRBENCH_CATEGORIES,
     ("hrbench4k", "by_cycle_category"): DEFAULT_HRBENCH_CYCLE_CATEGORIES,
     ("hrbench8k", "by_category"): DEFAULT_HRBENCH_CATEGORIES,
     ("hrbench8k", "by_cycle_category"): DEFAULT_HRBENCH_CYCLE_CATEGORIES,
+    ("naturalbench", "by_question_type"): ["yes_no", "multiple_choice"],
+    ("naturalbench", "by_source"): ["DOCCI", "Flickr", "XM3600"],
     ("mmmu", "by_domain"): DEFAULT_MMMU_DOMAINS,
     ("mmmu", "by_question_type"): DEFAULT_MMMU_QUESTION_TYPES,
     ("mmmu", "by_subject"): DEFAULT_MMMU_SUBJECTS,
@@ -143,6 +157,7 @@ METRIC_KEY_ORDER = [
     "figure_accuracy",
     "question_pair_accuracy",
     "error_breakdown",
+    "by_number",
     "by_capability",
     "by_capability_combo",
     "by_category",
@@ -152,7 +167,9 @@ METRIC_KEY_ORDER = [
     "by_subject",
     "by_structural_type",
     "by_semantic_type",
+    "by_source",
     "by_question_type",
+    "by_task",
     "by_data_type",
     "by_type",
     "by_answer_type",
@@ -519,6 +536,13 @@ def normalize_benchmark_name(name):
         "doc vqa": "docvqa",
         "doc-vqa": "docvqa",
         "doc_vqa": "docvqa",
+        "char-xiv": "charxiv",
+        "char_xiv": "charxiv",
+        "countbench": "countbenchqa",
+        "countbench-qa": "countbenchqa",
+        "countbench_qa": "countbenchqa",
+        "cv-bench": "cvbench",
+        "cv_bench": "cvbench",
         "hr-bench-4k": "hrbench4k",
         "hr-bench-8k": "hrbench8k",
         "hrbench_4k": "hrbench4k",
@@ -531,6 +555,8 @@ def normalize_benchmark_name(name):
         "mme-realworld": "mme_realworld",
         "mme_real_world": "mme_realworld",
         "mme-real-world": "mme_realworld",
+        "natural-bench": "naturalbench",
+        "natural_bench": "naturalbench",
         "v*bench": "vstar",
         "vstar_bench": "vstar",
     }
@@ -547,6 +573,12 @@ def infer_dataset(summary, summary_path: Path):
         return "hrbench4k"
     if "/hrbench8k/" in path_txt:
         return "hrbench8k"
+    if "/charxiv/" in path_txt or "/char-xiv/" in path_txt:
+        return "charxiv"
+    if "/cvbench/" in path_txt or "/cv-bench/" in path_txt:
+        return "cvbench"
+    if "/naturalbench/" in path_txt or "/natural-bench/" in path_txt:
+        return "naturalbench"
     if "/mmstar/" in path_txt:
         return "mmstar"
     if "/mmvet/" in path_txt or "/mm-vet/" in path_txt:
@@ -582,10 +614,12 @@ def metric_display_name(metric_key):
         "by_domain": "Domain Accuracy",
         "by_question_type": "Question Type Accuracy",
         "by_semantic_type": "Semantic Type Accuracy",
+        "by_source": "Source Accuracy",
         "by_subcategory": "Subcategory Accuracy",
         "by_subject": "Subject Accuracy",
         "by_split": "Split Accuracy",
         "by_structural_type": "Structural Type Accuracy",
+        "by_task": "Task Accuracy",
         "by_type": "Type Accuracy",
         "error_breakdown": "Error Breakdown",
         "figure_accuracy": "Figure Accuracy",
@@ -766,6 +800,14 @@ def accuracy_bucket(summary, key):
 
         correct = node.get("correct")
         total = node.get("total")
+        reviewed = node.get("reviewed")
+        if (
+            isinstance(reviewed, (int, float))
+            and isinstance(total, (int, float))
+            and reviewed < total
+            and not isinstance(acc, (int, float))
+        ):
+            return out
         if isinstance(correct, (int, float)) and isinstance(total, (int, float)) and total > 0:
             if prefix:
                 out[prefix] = float(correct) / float(total)

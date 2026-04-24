@@ -11,6 +11,9 @@ DEFAULT_CHECKPOINT_NAME_MAP = (
 )
 
 BENCHMARK_DISPLAY_NAMES = {
+    "charxiv": "CharXiv",
+    "countbenchqa": "CountBenchQA",
+    "cvbench": "CV-Bench",
     "chartqa": "ChartQA",
     "docvqa": "DocVQA",
     "dtd": "DTD",
@@ -25,10 +28,12 @@ BENCHMARK_DISPLAY_NAMES = {
     "mmmu": "MMMU",
     "mme": "MME",
     "mme_realworld": "MME-RealWorld",
+    "naturalbench": "NaturalBench",
     "pope": "POPE",
     "realworldqa": "RealWorldQA",
     "seed": "SEED",
     "textvqa": "TextVQA",
+    "visualoverload": "VisualOverload",
     "vizwiz": "VizWiz",
     "vqav2": "VQAv2",
     "vstar": "V*Bench",
@@ -40,6 +45,11 @@ BENCHMARK_ORDER = [
     "mmstar",
     "mmvet",
     "mmvp",
+    "cvbench",
+    "naturalbench",
+    "charxiv",
+    "visualoverload",
+    "countbenchqa",
     "gqa",
     "seed",
     "pope",
@@ -155,6 +165,13 @@ def normalize_benchmark_name(value):
         "doc vqa": "docvqa",
         "doc-vqa": "docvqa",
         "doc_vqa": "docvqa",
+        "cv-bench": "cvbench",
+        "cv_bench": "cvbench",
+        "char-xiv": "charxiv",
+        "char_xiv": "charxiv",
+        "countbench": "countbenchqa",
+        "countbench-qa": "countbenchqa",
+        "countbench_qa": "countbenchqa",
         "hr-bench-4k": "hrbench4k",
         "hr-bench-8k": "hrbench8k",
         "hrbench_4k": "hrbench4k",
@@ -167,6 +184,10 @@ def normalize_benchmark_name(value):
         "mme-realworld": "mme_realworld",
         "mme_real_world": "mme_realworld",
         "mme-real-world": "mme_realworld",
+        "natural-bench": "naturalbench",
+        "natural_bench": "naturalbench",
+        "visual-overload": "visualoverload",
+        "visual_overload": "visualoverload",
         "v*bench": "vstar",
         "vstar_bench": "vstar",
     }
@@ -184,6 +205,16 @@ def infer_dataset(summary, summary_path: Path):
         return "hrbench4k"
     if "/hrbench8k/" in path_txt:
         return "hrbench8k"
+    if "/cvbench/" in path_txt or "/cv-bench/" in path_txt:
+        return "cvbench"
+    if "/charxiv/" in path_txt or "/char-xiv/" in path_txt:
+        return "charxiv"
+    if "/countbenchqa/" in path_txt or "/countbench-qa/" in path_txt or "/countbench_qa/" in path_txt:
+        return "countbenchqa"
+    if "/visualoverload/" in path_txt or "/visual-overload/" in path_txt:
+        return "visualoverload"
+    if "/naturalbench/" in path_txt or "/natural-bench/" in path_txt:
+        return "naturalbench"
     if "/mmstar/" in path_txt:
         return "mmstar"
     if "/mmvet/" in path_txt or "/mm-vet/" in path_txt:
@@ -228,7 +259,7 @@ def infer_dataset(summary, summary_path: Path):
 def extract_overall_accuracy(summary):
     overall = summary.get("overall")
     if isinstance(overall, dict):
-        for key in ("accuracy", "score", "value"):
+        for key in ("accuracy", "reviewed_accuracy", "score", "value"):
             value = overall.get(key)
             if isinstance(value, (int, float)):
                 return float(value)
