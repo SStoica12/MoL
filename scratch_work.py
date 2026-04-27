@@ -5,12 +5,6 @@ import os
 import numpy as np
 from safetensors import safe_open
 
-vision_tower = torch.hub.load(
-                'facebookresearch/dinov2',
-                'dinov2_vitl14_reg4_dinotxt_tet1280d20h24l'
-            ).visual_model
-import pdb; pdb.set_trace()
-
 # dists = np.load("/shared/nas2/sstoica2/MoL/playground/router_distribution/router_probs_gqa_router_dino_distributin.npy") # (4192, 24)
 # import pdb; pdb.set_trace()
 
@@ -39,11 +33,17 @@ import pdb; pdb.set_trace()
 # import pdb; pdb.set_trace()
 # print(vision_tower.config)
 
-# state_dict = torch.load(
-#     "/shared/nas2/sstoica2/MoL/checkpoints/llava-v1.5-13b-moe-pretrain_2e-4_text-cond-attn-token-router_pretrain_dino/dino_mm_projector.bin",
-#     map_location="cpu"
-# )
-# import pdb; pdb.set_trace()
+state_dict_mm_clip = torch.load(
+    "/shared/nas2/sstoica2/MoL/checkpoints/llava-v1.5-13b-moe-pretrain_text-cond-attn-token-router_clip_dino_hybrid_k=1/mm_projector.bin",
+    map_location="cpu"
+)
+
+
+state_dict_mm_dino = torch.load(
+    "/shared/nas2/sstoica2/MoL/checkpoints/llava-v1.5-13b-moe-pretrain_text-cond-attn-token-router_clip_dino_hybrid_k=1/dino_mm_projector.bin",
+    map_location="cpu"
+)
+import pdb; pdb.set_trace()
 # root_dir = "/shared/nas2/sstoica2/MoL/checkpoints/llava-v1.5-13b-moe-finetune_2e-4_text-cond-attn-token-router_learnable-gate_dino"
 # # import pdb; pdb.set_trace()
 # files = sorted(glob.glob(os.path.join(root_dir, "model-*-of-00006.safetensors")))

@@ -197,12 +197,10 @@ class CustomDataset(Dataset):
             
             image_tensor_clip = None
             image_tensor_dino = None
-            path = os.path.join(self.image_folder, image_file)
-            assert os.path.exists(path), f"Image file not found: {path}"
-            image = Image.open(os.path.join(self.image_folder, image_file)).convert('RGB')
+            image_sizes = [image.size for image in images]
             if self.image_processor_clip is not None:
                 # rank0_print("\n processing image with CLIP processor")
-                image_tensor_clip = process_images(images,self.image_processor_clip, self.model_config) #[0]
+                image_tensor_clip = process_images(images, self.image_processor_clip, self.model_config) #[0]
             if self.image_processor_dino is not None:
                 # rank0_print("\n processing image with DINO processor")
                 image_tensor_dino = process_images(images, self.image_processor_dino, self.model_config) #[0]
@@ -215,6 +213,7 @@ class CustomDataset(Dataset):
         else:
             image_tensor_clip = None
             image_tensor_dino = None
+            image_sizes = None
             input_ids = self.tokenizer(prompt, return_tensors='pt').input_ids[0]
 
         """
@@ -226,23 +225,36 @@ class CustomDataset(Dataset):
         # rank0_print("prompt : ", prompt, "; type: ", type(prompt)) 
         # rank0_print("=========================")
         # import sys; sys.exit(0)
-        return input_ids, image_tensor_clip, image_tensor_dino, image.size
+        return input_ids, image_tensor_clip, image_tensor_dino, image_sizes
 
     def __len__(self):
         return len(self.questions)
 
 
 def collate_fn(batch):
+    assert len(batch) == 1, "batch_size must be 1"
     input_ids, image_tensor_clip, image_tensor_dino, image_sizes = zip(*batch)
-
     input_ids = torch.stack(input_ids, dim=0)
-    image_tensors_clip = None
-    image_tensors_dino = None
-    if image_tensor_clip is not None and image_tensor_clip[0] is not None:
-        image_tensors_clip = torch.stack(image_tensor_clip, dim=0)
-    if image_tensor_dino is not None and image_tensor_dino[0] is not None:
-        image_tensors_dino = torch.stack(image_tensor_dino, dim=0)
-    return input_ids, image_tensors_clip, image_tensors_dino, image_sizes
+    # he did not do this stacking that llava did. It seems like all data llava used
+    # only had one image for eval, so the stacking worked. However, for datasets with multiple
+    # images, like mmmlu, the stacking resulted in first dim being 1 rather than 2,
+    # resulting in problems in llava_arch.
+    make_image_size_false_clip = False
+    make_image_size_false_dino = False
+    if image_tensor_clip is not None:
+        if hasattr(image_tensor_clip, "ndim") and image_tensor_clip.ndim == 3:
+            image_tensor_clip = image_tensor_clip.unsqueeze(0)
+    else:
+        make_image_size_false_clip = True
+
+    if image_tensor_dino is not None:
+        if hasattr(image_tensor_dino, "ndim") and image_tensor_dino.ndim == 3:
+            image_tensor_dino = image_tensor_dino.unsqueeze(0)
+    else:
+        make_image_size_false_dino = True
+    if make_image_size_false_clip and make_image_size_false_dino:
+        image_sizes = None
+    return input_ids, image_tensor_clip, image_tensor_dino, image_sizes
 
 
 def create_data_loader(questions, image_folder, tokenizer, image_processor_dino, image_processor_clip, model_config, batch_size=1, num_workers=4):
@@ -689,10 +701,12 @@ def eval_model(args):
     model_name = get_model_name_from_path(model_path)
     rank0_print("model_path:", model_path)
     rank0_print("model_name:", model_name)
+    print("\n =========== args: ", args)
+    # import sys; sys.exit(0)
 
     # Make router flag robust to string/bool
     # import pdb; pdb.set_trace()
-    use_router = (str(args.use_router) == "True") or (args.use_router is True)
+    use_router = args.use_router
     if use_router:
         rank0_print("\n      we should be using router")
         tokenizer, model, image_processor_dino, image_processor_clip, context_len = load_pretrained_model_router(
@@ -714,7 +728,9 @@ def eval_model(args):
                                                             learnable_gate= args.learnable_gate,
                                                             confidence_gate=args.confidence_gate,
                                                             confidence_gate_threshold= args.confidence_gate_threshold,
-                                                            confidence_gate_slope= args.confidence_gate_slope,  # will help us get the correct router
+                                                            confidence_gate_slope= args.confidence_gate_slope,
+                                                            hybrid_disagreement_metric= args.hybrid_disagreement_metric,  
+                                                            hybrid_reserve_mode= args.hybrid_reserve_mode, 
                                                         )
     else:
         rank0_print("\n      not using router")
@@ -770,7 +786,12 @@ def eval_model(args):
                 model.router_clip.current_qid = idx
             # rank0_print("prompts: ", prompts)
             # rank0_print("===========")
-            # import sys; sys.exit(0)
+            # import pdb; pdb.set_trace()
+            if isinstance(image_tensor_clip, tuple) and len(image_tensor_clip) == 1:
+                image_tensor_clip = image_tensor_clip[0]
+            if isinstance(image_tensor_dino, tuple) and len(image_tensor_dino) == 1:
+                image_tensor_dino = image_tensor_dino[0]
+            
             output_ids = model.generate(
                 input_ids,
                 images=image_tensor_clip.to(dtype=torch.float16, device=next(model.parameters()).device, non_blocking=True) if image_tensor_clip is not None else None, # for some reason input was on cuda device 2 while model weight and bias were on cuda 0
@@ -880,7 +901,7 @@ def eval_model(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--model-path", type=str, default="facebook/opt-350m")
-    parser.add_argument("--use_router", type=str, default="True")
+    parser.add_argument("--use_router", action="store_true")
     parser.add_argument("--router_name", type=str, default="dino")
     parser.add_argument("--num_layers_to_choose", type=int, default=1)
     parser.add_argument("--router_alpha", type=int, default=10**-2)
@@ -908,13 +929,14 @@ if __name__ == "__main__":
     parser.add_argument("--text_attention_type", type=str, default="qk", help="How to merge features when using text attention conditioning. Options: concat (concatenate text and vision features before routing), qk (use text features to compute query/key for attention over vision features).")
     parser.add_argument("--text_attention_dim", type=int, default=1024, help="Dim of text attention")
     parser.add_argument("--attn_level", type=str, default="token", help="Used when text_conditiong is attention. Options: token, layer,  patch_layer, or hybrid.")
-    parser.add_argument("--force_reserve_layer", type=bool, default=True, help="Use reserve layer or not.")
+    parser.add_argument("--force_reserve_layer", action="store_true", help="Use reserve layer or not.")
     parser.add_argument("--reserve_layer", type=int, default=-2, help="The reserve layer index. Only used if force_reserve_layer is True. This layer will always be selected as the expert, and the router will choose (num_layers_to_choose - 1) experts from the remaining layers.")
-    parser.add_argument("--learnable_gate", type=bool, default=True, help="Use the learnable gate for the weighting of the image encoder features.")
-    parser.add_argument("--confidence_gate", type=bool, default=False, help="Whether to use a confidence gate for the weighting of the image encoder features.")
+    parser.add_argument("--learnable_gate", action="store_true", help="Use the learnable gate for the weighting of the image encoder features.")
+    parser.add_argument("--confidence_gate", action="store_true", help="Whether to use a confidence gate for the weighting of the image encoder features.")
     parser.add_argument("--confidence_gate_threshold", type=float, default=0.6, help="Threshold for the confidence gate. If the router's confidence (max softmax probability) is below this threshold, the image encoder features will be downweighted.")
     parser.add_argument("--confidence_gate_slope", type=float, default=10.0, help="Slope for the confidence gate. Higher values make the gate more like a hard threshold, while lower values make it smoother.")
-    
+    parser.add_argument("--hybrid_reserve_mode", type=str, default="local_gate", help="When attn_level is hybrid, this determines how the reserve layer is used. Options: local_gate (use a local gate to combine the reserve layer with the router's selected experts), always_concat (always concatenate the reserve layer features with the vision features regardless of router selection), dynamic_concat (dynamically decide whether to concatenate the reserve layer based on the router's confidence or other criteria).")
+    parser.add_argument("--hybrid_disagreement_metric", type=str, default="kl_local_global", help="When attn_level is hybrid, this determines how to measure disagreement between the local router (which chooses among the experts) and a global router (which has access to all features). Options: kl_local_global (compute KL divergence between the local router's distribution over experts and a global router's distribution that considers all features), confidence_gap (measure the gap in confidence between the local router's top choice and the global router's top choice), feature_distance (compute a distance metric between the features used by the local router and those used by the global router). This metric can be used to inform the hybrid reserve mode, for example by activating the reserve layer when disagreement is high.")
     args = parser.parse_args()
 
     eval_model(args)

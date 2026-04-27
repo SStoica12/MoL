@@ -1,31 +1,20 @@
 #!/bin/bash
 set -euo pipefail
-
+export CUDA_VISIBLE_DEVICES=1
 MODEL_PATH="${MODEL_PATH:-liuhaotian/llava-v1.5-13b}"
 CONV_MODE="${CONV_MODE:-vicuna_v1}"
 TEMPERATURE="${TEMPERATURE:-0}"
-SEED_ROOT="${SEED_ROOT:-./playground/data/eval/seed_bench}"
-SEED_OUT_ROOT="${SEED_OUT_ROOT:-./playground/data/eval/seed_bench_out}"
-QUESTION_FILE="${QUESTION_FILE:-${SEED_ROOT}/llava-seed-bench.jsonl}"
-ANNOTATION_FILE="${ANNOTATION_FILE:-${SEED_ROOT}/SEED-Bench.json}"
+SEED_ROOT="/shared/nas2/jk100/MoL/playground/data/eval/seed_bench"
+SEED_OUT_ROOT="/shared/nas2/jk100/MoL/playground/data/eval/seed_bench_out"
+QUESTION_FILE="/shared/nas2/jk100/MoL/playground/data/eval/seed_bench/llava-seed-bench.jsonl"
+ANNOTATION_FILE="/shared/nas2/jk100/MoL/playground/data/eval/seed_bench/llava-seed-bench.jsonl"
 
 # Optional batch mode:
 # Paste checkpoint directories here to evaluate multiple models in one run.
 # If non-empty, this list takes precedence over MODEL_PATH.
-CHECKPOINT_ROOT="/shared/nas2/jk100/MoL/checkpoints"
+CHECKPOINT_ROOT="/shared/nas2/sstoica2/MoL/checkpoints"
 MODEL_PATHS=(
-    "liuhaotian/llava-v1.5-13b"
-    "${CHECKPOINT_ROOT}/llava-v1.5-13b-moe-finetune_2e-4_router_learnable-gate_scaled-residual"
-    "${CHECKPOINT_ROOT}/llava-v1.5-13b-moe-finetune_2e-4_text-cond-attn-layer-router_learnable-gate_scaled-residual"
-    "${CHECKPOINT_ROOT}/llava-v1.5-13b-moe-finetune_2e-4_text-cond-attn-token-router_learnable-gate_scaled-residual"
-    "${CHECKPOINT_ROOT}/llava-v1.5-13b-moe-finetune_2e-4_text-cond-film-router_learnable-gate_scaled-residual"
-    "${CHECKPOINT_ROOT}/llava-v1.5-13b-moe-finetune_text-cond-attn-patchlayer-router_learnable-gate_lr1e-5-pretrain_lr2e-5-finetune"
-    "${CHECKPOINT_ROOT}/llava-v1.5-13b-moe-finetune_text-cond-attn-patchlayer-router_learnable-gate_lr1e-5-pretrain_lr2e-5-finetune_k2"
-    "${CHECKPOINT_ROOT}/llava-v1.5-13b-moe-finetune_text-cond-attn-patchlayer-router_learnable-gate_lr1e-5-pretrain_lr2e-5-finetune_k4"
-    "${CHECKPOINT_ROOT}/llava-v1.5-13b-moe-finetune_text-cond-attn-patchlayer-router_learnable-gate_lr1e-5-pretrain_lr2e-5-finetune_k6"
-    "${CHECKPOINT_ROOT}/llava-v1.5-13b-moe-finetune_text-cond-attn-patchlayer-router_learnable-gate_lr1e-5-pretrain_lr2e-5-finetune_no-delta"
-    "${CHECKPOINT_ROOT}/llava-v1.5-13b-moe-finetune_text-cond-attn-patchlayer-router_learnable-gate_lr1e-5-pretrain_lr2e-5-finetune_k2_no-delta"
-    "${CHECKPOINT_ROOT}/llava-v1.5-13b-moe-finetune_text-cond-attn-patchlayer-router_learnable-gate_lr1e-5-pretrain_lr2e-5-finetune_k4_no-delta"
+    "${CHECKPOINT_ROOT}/llava-v1.5-13b-moe-finetune_dino_no_router"
 )
 source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/model_paths_override.sh"
 load_model_paths_override

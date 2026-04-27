@@ -654,6 +654,7 @@ class RouterLLaVATrainer(Trainer):
         # import pdb; pdb.set_trace()
         images = inputs['images'] 
         dino_images = inputs['dino_images'] if 'dino_images' in inputs else None
+        # import pdb; pdb.set_trace()
         if dino_images is None and "dino" in self.encoder_type: # I want to be very clear what images are being passed
             dino_images = images
             inputs['dino_images'] = dino_images

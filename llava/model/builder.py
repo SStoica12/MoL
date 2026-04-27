@@ -57,6 +57,7 @@ from llava.constants import DEFAULT_IMAGE_PATCH_TOKEN, DEFAULT_IM_START_TOKEN, D
 from safetensors.torch import load_file
 from llava.model.language_model.llava_llama import RouterLlavaLlamaForCausalLM, DoubleRouterLlavaLlamaForCausalLM
 from llava.model.language_model.llava_mpt import RouterLlavaMptForCausalLM, DoubleRouterLlavaMptForCausalLM
+from llava.model.language_model.llava_mistral import RouterLlavaMistralForCausalLM, DoubleRouterLlavaMistralForCausalLM
 from llava.model.router import Router, TextConditionedRouter
 
 def rank0_print(*args):
@@ -83,6 +84,8 @@ def load_pretrained_model_router(model_path, model_base, model_name,
                                 use_flash_attn=False, num_layers_to_choose=1, 
                                 router_alpha=0.01, encoder_type ="dinov2_txt", 
                                 fusion_type= "cross_attn", 
+                                hybrid_reserve_mode="local_gate",
+                                hybrid_disagreement_metric="kl_local_global",
                                 **kwargs):
     rank0_print(f"\n      num_layers_to_choose is {num_layers_to_choose} and router_alpha is {0.01} and device_map {device_map}")
     rank0_print("\n model_base is None : ", model_base is None)
@@ -212,14 +215,14 @@ def load_pretrained_model_router(model_path, model_base, model_name,
             elif 'mistral' in model_name.lower():
                 tokenizer = AutoTokenizer.from_pretrained(model_path)
                 if "clip" in encoder_type and "dino" in encoder_type:
-                    model = DoubleRouterLlavaMptForCausalLM.from_pretrained(
+                    model = DoubleRouterLlavaMistralForCausalLM.from_pretrained(
                         model_path,
                         low_cpu_mem_usage=True,
                         config=cfg_pretrained,
                         **kwargs
                     )
                 else:
-                    model = RouterLlavaMptForCausalLM.from_pretrained(
+                    model = RouterLlavaMistralForCausalLM.from_pretrained(
                         model_path,
                         low_cpu_mem_usage=True,
                         config=cfg_pretrained,
@@ -299,14 +302,26 @@ def load_pretrained_model_router(model_path, model_base, model_name,
             image_size = dino_tower.config.image_size
             patch_size = dino_tower.config.patch_size
             hidden_size = dino_tower.config.hidden_size_dino
-            num_image_tokens = (image_size // patch_size)**2 # 257 even for dino txt, which has 4 registers
+            if "patch_layer" in model_path:
+                num_image_tokens = (image_size // patch_size)**2 + 1
+            else:
+                num_image_tokens = (image_size // patch_size)**2 # 257 even for dino txt, which has 4 registers
             router_dino_weights = torch.zeros((num_image_tokens, hidden_size)).to(dtype=dino_tower.dtype, device=dino_tower.device)
             rank0_print("\n router_dino_weights : ", router_dino_weights.shape)
             # import sys; sys.exit(0)
             assert router_dino_weights.is_cuda
             if not mm_use_text_enc:
                 rank0_print("\n We using normal Router")
-                model.router_dino = Router(model.config, router_dino_weights, model.config.mm_vision_select_feature, router_alpha)
+                model.router_dino = Router(config=model.config, weights=router_dino_weights,
+                                                        load_balancing_alpha=router_alpha,
+                                                        reserve_layer = dino_tower.config.mm_vision_select_feature,
+                                                        top_k=num_layers_to_choose,
+                                                        attn_level=attn_level, # "token" or "layer" (used when text_conditioning == "attention")
+                                                        force_reserve_layer=force_reserve_layer,
+                                                        learnable_gate=learnable_gate,
+                                                        confidence_gate=confidence_gate,
+                                                        confidence_gate_threshold=confidence_gate_threshold,
+                                                        confidence_gate_slope=confidence_gate_slope)
             else:
                 rank0_print("\n We are using TextConditionedRouter")
                 model.router_dino = TextConditionedRouter(config=model.config, weights=router_dino_weights,
@@ -316,6 +331,8 @@ def load_pretrained_model_router(model_path, model_base, model_name,
                                                         text_pool=text_pool,
                                                         text_scale=text_scale, # overall influence of text. Would this allow us to better modulate the features. hyperparam sweep
                                                         text_conditioning=text_conditioning, # "film" or "attention"
+                                                        hybrid_reserve_mode=hybrid_reserve_mode,
+                                                        hybrid_disagreement_metric=hybrid_disagreement_metric,
                                                         text_attention_type=text_attention_type, # "concat" or "qk"
                                                         text_attention_dim=text_attention_dim,
                                                         attn_level=attn_level, # "token" or "layer" (used when text_conditioning == "attention")
@@ -344,7 +361,16 @@ def load_pretrained_model_router(model_path, model_base, model_name,
             assert router_clip_weights.is_cuda
             if not mm_use_text_enc:
                 rank0_print("\n We using normal Router")
-                model.router_clip = Router(model.config, router_dino_weights, model.config.mm_vision_select_feature, router_alpha)
+                model.router_clip = Router(config=model.config, weights=router_clip_weights,
+                                                        load_balancing_alpha=router_alpha,
+                                                        reserve_layer = dino_tower.config.mm_vision_select_feature,
+                                                        top_k=num_layers_to_choose,
+                                                        attn_level=attn_level, # "token" or "layer" (used when text_conditioning == "attention")
+                                                        force_reserve_layer=force_reserve_layer,
+                                                        learnable_gate=learnable_gate,
+                                                        confidence_gate=confidence_gate,
+                                                        confidence_gate_threshold=confidence_gate_threshold,
+                                                        confidence_gate_slope=confidence_gate_slope)
             else:
                 rank0_print("\n We using TextConditionedRouter")
                 model.router_clip = TextConditionedRouter(config=model.config, weights=router_clip_weights,

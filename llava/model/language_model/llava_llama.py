@@ -28,6 +28,25 @@ from ..llava_arch import LlavaMetaModel, LlavaMetaForCausalLM
 from ..router import Router, TextConditionedRouter, TextOnlyRouter
 
 
+class ClipDinoCrossAttentionFusion(nn.Module):
+    def __init__(self, hidden_size: int):
+        super().__init__()
+        self.clip_attn_q = nn.Linear(hidden_size, hidden_size)
+        self.dino_attn_k = nn.Linear(hidden_size, hidden_size)
+        self.dino_attn_v = nn.Linear(hidden_size, hidden_size)
+        self.scale = 1.0 / (hidden_size ** 0.5)
+
+    def forward(self, clip_features: torch.Tensor, dino_features: torch.Tensor) -> torch.Tensor:
+        # Run all fusion projections in one module call to keep ZeRO-3 param
+        # gather/release aligned with module boundaries.
+        q = self.clip_attn_q(clip_features)
+        k = self.dino_attn_k(dino_features)
+        v = self.dino_attn_v(dino_features)
+        scores = (q @ k.transpose(-2, -1)) * self.scale
+        attn = torch.softmax(scores, dim=-1).to(device=dino_features.device, dtype=dino_features.dtype)
+        return attn @ v
+
+
 def _config_requires_router(config):
     if getattr(config, "has_router", False):
         return True
@@ -122,7 +141,8 @@ def rank0_print(*args):
 
 class LlavaConfig(LlamaConfig):
     model_type = "llava_llama"
-    encoder_type: str = "clip" # or dino or clip_dino or c4
+    encoder_type: str = "clip" # or dinov2_txt or clip-dinov2_txt
+    fussion_type: str = "attn"
 
 
 class LlavaLlamaModel(LlavaMetaModel, LlamaModel):
@@ -138,8 +158,20 @@ class LlavaLlamaForCausalLM(LlamaForCausalLM, LlavaMetaForCausalLM):
 
     def __init__(self, config):
         # print("config: ", config)
+        # import pdb; pdb.set_trace()
         super(LlamaForCausalLM, self).__init__(config)
+
         self.model = LlavaLlamaModel(config)
+        enc_type = getattr(config, 'encoder_type', '')
+        if ("clip" in enc_type or "siglip" in enc_type) and "dino" in enc_type:
+            if getattr(config, 'fusion_type', '') == "attn":
+                self.model.clip_dino_fusion = ClipDinoCrossAttentionFusion(config.hidden_size)
+                # Keep aliases for existing checkpoint-loading/training code paths.
+                self.model.clip_attn_q = self.model.clip_dino_fusion.clip_attn_q
+                self.model.dino_attn_k = self.model.clip_dino_fusion.dino_attn_k
+                self.model.dino_attn_v = self.model.clip_dino_fusion.dino_attn_v
+                rank0_print(f"Initialized attn projectors for clip+dino fusion: {config.fusion_type}")
+
         self.pretraining_tp = config.pretraining_tp
         self.vocab_size = config.vocab_size
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
@@ -234,7 +266,7 @@ class LlavaLlamaForCausalLM(LlamaForCausalLM, LlavaMetaForCausalLM):
     ) -> Union[GenerateOutput, torch.LongTensor]:
         position_ids = kwargs.pop("position_ids", None)
         attention_mask = kwargs.pop("attention_mask", None)
-        clip_texts = kwargs.pop("clip_texts", None)
+        # clip_texts = kwargs.pop("clip_texts", None)
         if "inputs_embeds" in kwargs:
             raise NotImplementedError("`inputs_embeds` is not supported")
 
@@ -292,26 +324,25 @@ class LlavaLlamaForCausalLM(LlamaForCausalLM, LlavaMetaForCausalLM):
         return inputs
 
 class DoubleRouterLlavaLlamaForCausalLM(LlavaLlamaForCausalLM): # for both dino and clip
-    def __init__(self, config, router = None, load_balance_alpha=10**-2, type="llava", aggregate_type = "attn"): # aggregate type will be one of linear, pool, attention. 
+    def __init__(self, config, router_clip = None, router_dino = None, load_balance_alpha=10**-2, type="llava", aggregate_type = "attn"): # aggregate type will be one of linear, pool, attention. 
                                                                                                                 # linear means to concat then pass through linear layer, 
                                                                                                                 #  pool means to do line dino txt, and attention is 
                                                                                                                 # Jeonghwan's idea
         # if we combine the features, we interleave clip and dino as input to the router. 
         super().__init__(config)
-        self.router_clip = router
-        self.router_dino = router
-        if router is None and _config_requires_router(config):
-            router = _build_router_from_config(self, config)
-        self.router = router
+        self.router_clip = router_clip
+        self.router_dino = router_dino
         self.load_balance_alpha = load_balance_alpha
         self.aggregate_type = aggregate_type
         if aggregate_type=="linear":
             self.linear = nn.Linear(config.vision_hidden_size * 2, config.vision_hidden_size) # is there a way to define this here? Think I would need 
                                                                                               #to get the hidden dims of clip and dino...
+        # import pdb; pdb.set_trace()
         self.text_embeds_clip = None
         self.text_embeds_dino = None
         self.text_attention_mask_clip = None
         self.text_attention_mask_dino = None
+    
     def get_model(self):
         return self.model
     
@@ -322,12 +353,17 @@ class DoubleRouterLlavaLlamaForCausalLM(LlavaLlamaForCausalLM): # for both dino 
             print(*args)
     # the prepare_multimodal_inputs takes care of the merging
     def encode_images_withdino(self, dino_images, text_embeds=None, text_attention_mask=None):
+        # import pdb; pdb.set_trace()
+        """
+        text_embeds.shape,  text_attention_mask.shape
+        (torch.Size([32, 2048]), torch.Size([32, 27]))
+        """
         self.rank0_print(" \n ================= I AM IN ROUTER ENCODE DINO IMAGES =================")
         vision_tower = self.get_model().get_dino_vision_tower()
         device = next(vision_tower.parameters()).device
         dtype = next(vision_tower.parameters()).dtype
-        self.text_embeds_dino = text_embeds
-        self.text_attention_mask_dino = text_attention_mask
+        self.text_embeds = text_embeds
+        self.text_attention_mask = text_attention_mask
         
         if type(dino_images) is list:
             image_features = []
@@ -336,24 +372,26 @@ class DoubleRouterLlavaLlamaForCausalLM(LlavaLlamaForCausalLM): # for both dino 
                 image_features.append(hidden_states)
             hidden_states = torch.stack([hs for hs in image_features])
         else:
-            _,hidden_states = vision_tower(dino_images.to(device=device, dtype=dtype), output_hidden_states=True) # all 25 layers have  torch.Size([32, 577, 1024])
-            hidden_states = torch.stack(list(hidden_states))
-        assert hidden_states.ndim == 4
-        image_features = self.router_dino(hidden_states, text_embeds=text_embeds, text_attention_mask=text_attention_mask, type="dino")
-        assert image_features.requires_grad == True
+            _,hidden_states = vision_tower(dino_images.to(device=device, dtype=dtype), output_hidden_states=True) # all 24 layers have  torch.Size([32, 257, 1024])
+            hidden_states = torch.stack(list(hidden_states)) #torch.Size([24, 32, 256, 1024])
+        assert hidden_states.ndim == 4 # torch.Size([24, 32, 256, 1024])
+        # print("hidden_states : ", hidden_states.device)
+        # print("self.router_dino parameters", next(self.router_dino.parameters()).device)
+        # import pdb; pdb.set_trace()
+        image_features = self.router_dino(hidden_states, text_embeds=text_embeds, text_attention_mask=text_attention_mask, type="dino") 
+        # assert image_features.requires_grad == True
         image_features = self.get_model().dino_mm_projector(image_features)
-        assert image_features.requires_grad == True
+        # assert image_features.requires_grad == True
         return image_features
 
-    def encode_images_withclip(self, images, text_embeds=None, text_attention_mask=None, encoder_type="clip"):
-        self.rank0_print(f" \n ================== I AM IN ROUTER ENCODE IMAGES WITH CLIP using encoder {encoder_type}! ==================")
-        # import pdb; pdb.set_trace()
-        vision_tower = self.get_model().get_vision_tower(load_model=encoder_type).vision_tower
+    def encode_images_withclip(self, images, text_embeds=None, text_attention_mask=None, type_encoder="clip"):
+        self.rank0_print(f" \n ================== I AM IN ROUTER ENCODE IMAGES WITH CLIP  using encoder {type_encoder}! ==================")
+        vision_tower = self.get_model().get_vision_tower(load_model=type_encoder).vision_tower
         device = vision_tower.device
         dtype = vision_tower.dtype
-        self.text_embeds_clip = text_embeds
-        self.text_attention_mask_clip = text_attention_mask
-        
+        self.text_embeds = text_embeds
+        self.text_attention_mask = text_attention_mask
+        assert text_embeds is not None, "We are using text conditioned routing, so please pass in the text embedings"
         if type(images) is list:
             image_features = []
             for image in images:
@@ -364,7 +402,8 @@ class DoubleRouterLlavaLlamaForCausalLM(LlavaLlamaForCausalLM): # for both dino 
             hidden_states = torch.stack(list(image_forward_outs.hidden_states)) # [num_layers, batch_size, num_image_tokens, vision_hidden_dim]
         
         assert hidden_states.ndim == 4
-        image_features = self.router_clip(hidden_states[1:, :, :, :], text_embeds=text_embeds, text_attention_mask=text_attention_mask, type=encoder_type) # do not want to include the embedding layer
+        # import pdb; pdb.set_trace()
+        image_features = self.router_clip(hidden_states[1:, :, :, :], text_embeds=text_embeds, text_attention_mask=text_attention_mask, type=type_encoder) # do not want to include the embedding layer
         assert image_features.requires_grad == True
         # import pdb; pdb.set_trace()
         image_features = self.get_model().mm_projector(image_features) # Just one project?
@@ -383,8 +422,7 @@ class DoubleRouterLlavaLlamaForCausalLM(LlavaLlamaForCausalLM): # for both dino 
     
     def get_aux_loss(self, images, dino_images): #<- I need to pass in dino images
         # calculate the hidden states
-        import pdb; pdb.set_trace()
-
+        # import pdb; pdb.set_trace()
         load_balanace_loss_clip = None
         load_blanace_loss_dino = None
         cached_router_probs_clip = getattr(self.router_clip, "_latest_router_probs_for_aux_clip", None)
@@ -395,7 +433,9 @@ class DoubleRouterLlavaLlamaForCausalLM(LlavaLlamaForCausalLM): # for both dino 
             load_blanace_loss_dino =  self.router_dino.load_balance_loss(cached_router_probs_dino)
 
         if load_balanace_loss_clip is not None and load_blanace_loss_dino is not None:
-            return load_balanace_loss_clip + load_blanace_loss_dino #TODO: change if needed
+            loss = load_balanace_loss_clip + load_blanace_loss_dino
+            rank0_print(f"\n load ballance loss is {loss.item()} with clip loss {load_balanace_loss_clip.item() if load_balanace_loss_clip is not None else 'N/A'} and dino loss {load_blanace_loss_dino.item() if load_blanace_loss_dino is not None else 'N/A'}")
+            return loss #TODO: change if needed
 
         vision_tower_clip = self.get_model().get_vision_tower().vision_tower
         if hasattr(self.get_model(), "get_dino_vision_tower"): # this works fine for seperate instances but not for when I have both. TODO: why?
@@ -423,6 +463,7 @@ class DoubleRouterLlavaLlamaForCausalLM(LlavaLlamaForCausalLM): # for both dino 
             loss_clip = self.router_clip.load_balance_loss(router_probs_clip)
             loss_dino = self.router_dino.load_balance_loss(router_probs_dino)
             loss = loss_clip + loss_dino # how do I make this better? Do I introduce scaling coefs?
+        rank0_print(f"\n load ballance loss is {loss.item()} with clip loss {loss_clip.item() if loss_clip is not None else 'N/A'} and dino loss {loss_dino.item() if loss_dino is not None else 'N/A'}")
         return loss
 
 class RouterLlavaLlamaForCausalLM(LlavaLlamaForCausalLM):
@@ -457,6 +498,11 @@ class RouterLlavaLlamaForCausalLM(LlavaLlamaForCausalLM):
         return self.model
     
     def encode_images_withdino(self, dino_images, text_embeds=None, text_attention_mask=None):
+        """
+        (Pdb) text_embeds.shape, text_attention_mask.shape
+        (torch.Size([32, 2048]), torch.Size([32, 27]))
+        """
+        rank0_print("text_embeds shape: ", text_embeds.shape)
         self.rank0_print(" \n ================= I AM IN ROUTER ENCODE DINO IMAGES =================")
         vision_tower = self.get_model().get_dino_vision_tower()
         device = next(vision_tower.parameters()).device
@@ -473,6 +519,7 @@ class RouterLlavaLlamaForCausalLM(LlavaLlamaForCausalLM):
         else:
             _,hidden_states = vision_tower(dino_images.to(device=device, dtype=dtype), output_hidden_states=True) # all 24 layers have  torch.Size([32, 257, 1024])
             hidden_states = torch.stack(list(hidden_states))
+        # import pdb; pdb.set_trace()
         assert hidden_states.ndim == 4
         # print("hidden_states : ", hidden_states.device)
         # print("self.router_dino parameters", next(self.router_dino.parameters()).device)
@@ -484,6 +531,7 @@ class RouterLlavaLlamaForCausalLM(LlavaLlamaForCausalLM):
         return image_features
 
     def encode_images_withclip(self, images, text_embeds=None, text_attention_mask=None, type_encoder="clip"):
+        rank0_print("text_embeds shape: ", text_embeds.shape)
         self.rank0_print(f" \n ================== I AM IN ROUTER ENCODE IMAGES WITH CLIP  using encoder {type_encoder}! ==================")
         vision_tower = self.get_model().get_vision_tower(load_model=type_encoder).vision_tower
         device = vision_tower.device

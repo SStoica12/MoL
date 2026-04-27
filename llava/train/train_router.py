@@ -400,7 +400,7 @@ def safe_save_model_for_hf_trainer(trainer: transformers.Trainer,
         # Only save Adapter and scaling coefs
         # import pdb; pdb.set_trace()
         if hasattr(trainer.model, 'mm_projector') or hasattr(trainer.model.model, 'mm_projector'):
-            keys_to_match = ['mm_projector', 'router_clip'] ## CHECK
+            keys_to_match = ['mm_projector', 'router_clip', 'clip_attn_q', "dino_attn_k", "dino_attn_v"]
             if getattr(trainer.args, "tune_residual_scaling_coef", False):
                 keys_to_match.extend(['scaling_coef'])
             if getattr(trainer.args, "use_im_start_end", False):
@@ -1283,6 +1283,7 @@ def train(attn_implementation=None):
             model_args=model_args,
             fsdp=training_args.fsdp
         )
+        rank0_print("\n Vision tower initialized and frozen.")
         # initialize vision tower to frozen
         # pdb.set_trace()
         vision_tower = None
@@ -1352,8 +1353,12 @@ def train(attn_implementation=None):
             if text_hidden_size is None:
                 raise ValueError("Unable to infer text hidden size for TextConditionedRouter.")
             model.config.mm_text_hidden_size = text_hidden_size
+        
+        if "dino" in model_args.encoder_type:
             model.config.dino_mm_text_hidden_size = 2048 # this is what is needed for dino
+        
 
+        rank0_print("\n Router configs set in model.config.")
         # import pdb; pdb.set_trace()
         # print("model.config : ", model.config)
         # import sys; sys.exit(0)
@@ -1386,10 +1391,14 @@ def train(attn_implementation=None):
         # import pdb; pdb.set_trace()
         if model_args.use_text_conditioned_router:
             if ("clip" in model_args.encoder_type or "siglip" in model_args.encoder_type):
+                # we use encoder type in text conditioning to infer the _infer_text_hidden_size dim, 
+                # which is different for clip and dino.
+                config_clip = copy.deepcopy(model.config)
+                config_clip.encoder_type = "clip"
                 model.router_clip = router_cls(
-                    model.config,
+                    config_clip,
                     router_clip_weights,
-                    model.config.mm_vision_select_feature,
+                    config_clip.mm_vision_select_feature,
                     training_args.load_balancing_alpha,
                     text_pool=model_args.text_pool,
                     text_scale=model_args.text_scale,
@@ -1407,10 +1416,12 @@ def train(attn_implementation=None):
                     confidence_gate_slope=model_args.confidence_gate_slope,
                 )
             if "dino" in model_args.encoder_type:
+                config_dino = copy.deepcopy(model.config)
+                config_dino.encoder_type = "dino"
                 model.router_dino = router_cls(
-                    model.config,
+                    config_dino,
                     router_dino_weights,
-                    model.config.mm_vision_select_feature,
+                    config_dino.mm_vision_select_feature,
                     training_args.load_balancing_alpha,
                     text_pool=model_args.text_pool,
                     text_scale=model_args.text_scale,
@@ -1547,6 +1558,7 @@ def train(attn_implementation=None):
                 )
 
         # replace zero weights with learned router weights
+        # import pdb; pdb.set_trace()
         if model_args.pretrain_mm_mlp_adapter is not None:
             weights = torch.load(model_args.pretrain_mm_mlp_adapter, map_location='cpu')
             def get_w(weights, keyword):
@@ -1554,7 +1566,27 @@ def train(attn_implementation=None):
                 def remap(k): return '_weight_fn.' + k if k == 'weights' else k
                 return {remap(k.split(keyword + '.')[1]): v for k, v in weights.items() if keyword in k}
             model.router_clip.load_state_dict(get_w(weights, 'router_clip'))
-            print("router_clip weights: ", model.router_clip.weights)
+            rank0_print(" \n loaded router_clip weights...")
+            
+            for attn_name in ("clip_attn_q", "dino_attn_k", "dino_attn_v"):
+                attn_mod = getattr(model, attn_name, None)
+                if attn_mod is None and hasattr(model, "get_model"):
+                    attn_mod = getattr(model.get_model(), attn_name, None)
+                if attn_mod is not None:
+                    attn_w = {k.split(f"model.{attn_name}.")[1]: v for k, v in weights.items() if f"model.{attn_name}." in k}
+                    if attn_w:
+                        try:
+                            attn_mod.load_state_dict(attn_w)
+                        except:
+                            rank0_print("\n problem with clip_attn_q, dino_attn_k, dino_attn_v loading weights. This may result in problems during training of inflight parameters.")
+                            # if we are here then that means that weights from llm were offloaded
+                            # to the cpu, including our attn_modules
+                            from deepspeed import zero
+                            with zero.GatheredParameters(list(attn_mod.parameters()), modifier_rank=0):
+                                for pname, param in attn_mod.named_parameters():
+                                    if pname in attn_w:
+                                        param.data.copy_(attn_w[pname])
+                        rank0_print(f"Loaded pretrained weights for {attn_name}")
 
         # import pdb; pdb.set_trace()
         if model_args.pretrain_dino_mm_mlp_adapter is not None:
@@ -1602,6 +1634,15 @@ def train(attn_implementation=None):
                 for n,p in layers.named_parameters():
                     if 'scaling_coef' not in n:
                         p.requires_grad_(True)
+        
+        for attn_name in ("clip_attn_q", "dino_attn_k", "dino_attn_v"):
+            attn_mod = getattr(model, attn_name, None)
+            if attn_mod is None and hasattr(model, "get_model"):
+                attn_mod = getattr(model.get_model(), attn_name, None)
+            if attn_mod is not None:
+                for p in attn_mod.parameters():
+                    p.requires_grad = True
+
         if model_args.tune_mm_mlp_adapter:
             for n,p in model.named_parameters():
                 if 'router' not in n:
@@ -1614,6 +1655,7 @@ def train(attn_implementation=None):
             if hasattr(model.get_model(), "dino_mm_projector"):
                 for p in model.get_model().dino_mm_projector.parameters():
                         p.requires_grad = True
+            
 
         if model_args.tune_residual_scaling_coef:
             if vision_tower is not None:
@@ -1746,7 +1788,6 @@ def train(attn_implementation=None):
             model.save_pretrained(training_args.output_dir, state_dict=state_dict)
             torch.save(non_lora_state_dict, os.path.join(training_args.output_dir, 'non_lora_trainables.bin'))
     else:
-        # print("SHOULD BE SAVING HERE????")
         safe_save_model_for_hf_trainer(trainer=trainer,
                                        output_dir=training_args.output_dir)
     # with open("/shared/nas2/sstoica2/MoL/router_info_per_step.json", 'w') as f:

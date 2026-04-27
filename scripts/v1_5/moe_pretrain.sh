@@ -2,7 +2,7 @@
 
 export WANDB_ENTITY="uiucnlp"
 export WANDB_PROJECT="mixture-of-layers"
-NUM_LAYERS_TO_CHOOSE=1
+NUM_LAYERS_TO_CHOOSE=4
 export WANDB_NAME="MoL_dino_pretrain_text-cond-attn-token-router_pretrain_hybrid_k=${NUM_LAYERS_TO_CHOOSE}"
 export WANDB_MODE="online"  # ensure it uploads
 # export WANDB_DIR="/shared/nas2/jk100/MoL/scripts/v1_5/wandb" - where to store wandb logs
@@ -19,7 +19,7 @@ MASTER_PORT="${MASTER_PORT:-29600}"
 # deepspeed --include localhost:3 --master_port 29501
 # if you ever get The server socket has failed to bind to... just change the master port in bash
 # deepspeed --master_port "${MASTER_PORT}" --include localhost:0,1,2,3
-deepspeed --master_port "${MASTER_PORT}" --include localhost:0,1,2,3 "${REPO_ROOT}/llava/train/train_mem_router.py" \
+deepspeed --master_port "${MASTER_PORT}" --include localhost:1,2,3 "${REPO_ROOT}/llava/train/train_mem_router.py" \
     --deepspeed "${DEEPSPEED_CONFIG}" \
     --model_name_or_path lmsys/vicuna-13b-v1.5 \
     --version plain \

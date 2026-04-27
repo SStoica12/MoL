@@ -6,7 +6,7 @@ export WANDB_PROJECT="mixture-of-layers"
 export WANDB_NAME="MoL_router_choose_layers_finetune_text-cond-attn-token-router-gate_dino_hybrid_k=${NUM_LAYERS_TO_CHOOSE}"
 export WANDB_MODE="online"  # ensure it uploads
 
-NUM_LAYERS_TO_CHOOSE=1
+NUM_LAYERS_TO_CHOOSE=4
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 DEEPSPEED_CONFIG=/shared/nas2/sstoica2/MoL/scripts/zero3_offload.json
 # DEEPSPEED_CONFIG="${DEEPSPEED_CONFIG:-${REPO_ROOT}/scripts/zero3.json}"
@@ -23,7 +23,7 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 deepspeed "${REPO_ROOT}/llava/train/train_mem_route
     --data_path "${DATA_PATH}" \
     --image_folder "${IMAGE_FOLDER}" \
     --vision_tower openai/clip-vit-large-patch14-336 \
-    --pretrain_dino_mm_mlp_adapter /shared/nas2/sstoica2/MoL/checkpoints/llava-v1.5-13b-moe-pretrain_text-cond-attn-token-router_dino_hybrid_k=1/dino_mm_projector.bin \
+    --pretrain_dino_mm_mlp_adapter /shared/nas2/sstoica2/MoL/checkpoints/llava-v1.5-13b-moe-pretrain_text-cond-attn-token-router_dino_hybrid_k=2/dino_mm_projector.bin \
     --mm_projector_type mlp2x_gelu \
     --freeze_residual_scaling_coef True \
     --mm_vision_select_layer -2 \

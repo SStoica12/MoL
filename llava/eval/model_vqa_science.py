@@ -11,7 +11,7 @@ from llava.eval.router_logging import (
     clear_router_selection_metadata,
     get_router_selection_metadata,
 )
-from llava.model.builder import load_pretrained_model
+from llava.model.builder import load_pretrained_model, load_pretrained_model_router
 from llava.utils import disable_torch_init
 from llava.mm_utils import tokenizer_image_token, process_images, get_model_name_from_path
 
@@ -163,7 +163,9 @@ def eval_model(args):
                                                             learnable_gate= args.learnable_gate,
                                                             confidence_gate=args.confidence_gate,
                                                             confidence_gate_threshold= args.confidence_gate_threshold,
-                                                            confidence_gate_slope= args.confidence_gate_slope,  # will help us get the correct router
+                                                            confidence_gate_slope= args.confidence_gate_slope,
+                                                            hybrid_disagreement_metric= args.hybrid_disagreement_metric,  
+                                                            hybrid_reserve_mode= args.hybrid_reserve_mode, 
                                                         )
     else:
         rank0_print("\n      not using router")
@@ -276,7 +278,8 @@ if __name__ == "__main__":
     parser.add_argument("--confidence_gate", type=bool, default=False, help="Whether to use a confidence gate for the weighting of the image encoder features.")
     parser.add_argument("--confidence_gate_threshold", type=float, default=0.6, help="Threshold for the confidence gate. If the router's confidence (max softmax probability) is below this threshold, the image encoder features will be downweighted.")
     parser.add_argument("--confidence_gate_slope", type=float, default=10.0, help="Slope for the confidence gate. Higher values make the gate more like a hard threshold, while lower values make it smoother.")
-    
+    parser.add_argument("--hybrid_reserve_mode", type=str, default="local_gate", help="When attn_level is hybrid, this determines how the reserve layer is used. Options: local_gate (use a local gate to combine the reserve layer with the router's selected experts), always_concat (always concatenate the reserve layer features with the vision features regardless of router selection), dynamic_concat (dynamically decide whether to concatenate the reserve layer based on the router's confidence or other criteria).")
+    parser.add_argument("--hybrid_disagreement_metric", type=str, default="kl_local_global", help="When attn_level is hybrid, this determines how to measure disagreement between the local router (which chooses among the experts) and a global router (which has access to all features). Options: kl_local_global (compute KL divergence between the local router's distribution over experts and a global router's distribution that considers all features), confidence_gap (measure the gap in confidence between the local router's top choice and the global router's top choice), feature_distance (compute a distance metric between the features used by the local router and those used by the global router). This metric can be used to inform the hybrid reserve mode, for example by activating the reserve layer when disagreement is high.")
     args = parser.parse_args()
 
     eval_model(args)

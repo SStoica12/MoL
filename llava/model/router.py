@@ -39,7 +39,7 @@ class Router(nn.Module):
                 vision_feature_select_strategy="cls_patch"):
         super().__init__()
         self.num_layers_to_choose = top_k
-        rank0_print(f"Initialized Router with num_layers_to_choose={self.num_layers_to_choose}, ")
+        # rank0_print(f"Initialized Router with num_layers_to_choose={self.num_layers_to_choose}, ")
         self.config = config
         self.num_layers = None
         self.vision_feature_select_strategy = vision_feature_select_strategy  # "patch", "cls_patch", "cls"
@@ -89,6 +89,7 @@ class Router(nn.Module):
         """Expose the parameter for checkpointing/printing compatibility."""
         return self._weight_fn.weights
     def _select_vision_features(self, image_features: torch.Tensor) -> torch.Tensor:
+        # import pdb; pdb.set_trace()
         strategy = self.vision_feature_select_strategy
         if strategy in ("default", "cls_patch"):
             return image_features
@@ -575,7 +576,7 @@ class TextConditionedRouter(Router):
                 "Pass weights with a valid shape or provide config.mm_hidden_size/"
                 "config.vision_config.hidden_size."
             )
-        # #import pdb; pdb.set_trace()
+        # import pdb; pdb.set_trace()
         self.text_hidden_size = self._infer_text_hidden_size(config)
         if self.text_hidden_size is None:
             raise ValueError(
@@ -618,8 +619,12 @@ class TextConditionedRouter(Router):
                 self.text_attn_scale = None
             else:
                 # Project text as query and vision tokens as keys.
-                self.text_attn_dim = text_attention_dim or self.vision_hidden_size
-                self.text_attn_q = nn.Linear(self.text_hidden_size, self.text_attn_dim)
+                # import pdb; pdb.set_trace()
+                self.text_attn_dim = text_attention_dim or self.vision_hidden_size #1024
+                try:
+                    self.text_attn_q = nn.Linear(self.text_hidden_size, self.text_attn_dim)
+                except:
+                    import pdb; pdb.set_trace()
                 self.text_attn_k = nn.Linear(self.vision_hidden_size, self.text_attn_dim)
                 self.text_attn_scale = 1.0 / math.sqrt(self.text_attn_dim)
                 self.text_attn_mlp = None
@@ -770,7 +775,11 @@ class TextConditionedRouter(Router):
             concat = torch.cat([layer_summary, text_expanded], dim=-1)
             scores = self.text_attn_mlp(concat).squeeze(-1)  # [L, B]
         else:
-            q = self.text_attn_q(text_summary)  # [B, D]
+            # import pdb; pdb.set_trace()
+            try:
+                q = self.text_attn_q(text_summary)  # we error out because text summary changes shape from torch.Size([32, 768]) to torch.Size([32, 2048])
+            except:
+                import pdb; pdb.set_trace()
             k = self.text_attn_k(layer_summary)  # [L, B, D]
             scores = (k * q.unsqueeze(0)).sum(dim=-1) * self.text_attn_scale  # [L, B]
         return scores
@@ -1024,6 +1033,7 @@ class TextConditionedRouter(Router):
             router_probs_for_selection: [B, N, L] probabilities with reserved layer masked out when enabled.
             reserve_layer_prob: [B, N] reserved-layer mixing weight for each patch.
         """
+        # import pdb; pdb.set_trace()
         scores = self._compute_patch_router_scores(
             hidden_states, text_embeds, text_attention_mask
         )
@@ -1504,6 +1514,7 @@ class TextOnlyRouter(Router):
         )
         self.text_pool = text_pool
         self.text_scale = text_scale
+        import pdb; pdb.set_trace()
         self.text_hidden_size = self._infer_text_hidden_size(config)
         if self.text_hidden_size is None:
             raise ValueError(

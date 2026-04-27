@@ -1,6 +1,6 @@
 #!/bin/bash
 set -euo pipefail
-
+export CUDA_VISIBLE_DEVICES=2
 MODEL_PATH="${MODEL_PATH:-liuhaotian/llava-v1.5-13b}"
 MODEL_BASE="${MODEL_BASE:-}"
 CONV_MODE="${CONV_MODE:-vicuna_v1}"
@@ -14,17 +14,8 @@ MAX_NEW_TOKENS="${MAX_NEW_TOKENS:-16}"
 # If non-empty, this list takes precedence over --model-path / MODEL_PATH.
 CHECKPOINT_ROOT="/shared/nas2/sstoica2/MoL/checkpoints"
 MODEL_PATHS=(
-    # "liuhaotian/llava-v1.5-13b"
-    # "${CHECKPOINT_ROOT}/llava-v1.5-13b-moe-finetune_2e-4_router_learnable-gate_scaled-residual"
-    # "${CHECKPOINT_ROOT}/llava-v1.5-13b-moe-finetune_2e-4_text-cond-attn-layer-router_learnable-gate_scaled-residual"
-    # "${CHECKPOINT_ROOT}/llava-v1.5-13b-moe-finetune_2e-4_text-cond-attn-token-router_learnable-gate_scaled-residual"
-    # "${CHECKPOINT_ROOT}/llava-v1.5-13b-moe-finetune_2e-4_text-cond-film-router_learnable-gate_scaled-residual"
-    # "${CHECKPOINT_ROOT}/llava-v1.5-13b-moe-finetune_text-cond-attn-patchlayer-router_learnable-gate_lr1e-5-pretrain_lr2e-5-finetune"
-    # "${CHECKPOINT_ROOT}/llava-v1.5-13b-moe-finetune_text-cond-attn-patchlayer-router_learnable-gate_lr1e-5-pretrain_lr2e-5-finetune_k2"
-    # "${CHECKPOINT_ROOT}/llava-v1.5-13b-moe-finetune_text-cond-attn-patchlayer-router_learnable-gate_lr1e-5-pretrain_lr2e-5-finetune_k4"
-    # "${CHECKPOINT_ROOT}/llava-v1.5-13b-moe-finetune_text-cond-attn-patchlayer-router_learnable-gate_lr1e-5-pretrain_lr2e-5-finetune_k6"
-    # "${CHECKPOINT_ROOT}/llava-v1.5-13b-moe-finetune_text-cond-attn-patchlayer-router_learnable-gate_lr1e-5-pretrain_lr2e-5-finetune_no-delta",
-    "${CHECKPOINT_ROOT}/llava-v1.5-13b-moe-finetune_2e-4_text-cond-attn-token-router_learnable-gate_dino_patch_layer_corrected_k=2"
+    "${CHECKPOINT_ROOT}/llava-v1.5-13b-moe-finetune_2e-4_text-cond-attn-token-router_dino_hybrid_corrected_k=2"
+    # "${CHECKPOINT_ROOT}/llava-v1.5-13b-moe-finetune_dino_no_router"
 )
 
 BENCHMARK_DIR="/shared/nas2/jk100/MoL/playground/data/eval/HallusionBench"
@@ -141,11 +132,13 @@ run_eval_for_model() {
         --conv-mode "${CONV_MODE}" \
         --benchmark hallusionbench \
         --mm_use_text_enc \
-        --use_router True \
-        --force_reserve_layer True \
-        --attn_level "patch_layer" \
-        --mm_use_text_enc \
+        --attn_level "hybrid" \
+        --use_router \
+        --hybrid_reserve_mode disagreement_gate \
+        --hybrid_disagreement_metric kl_local_global \
         --num_layers_to_choose 2 \
+        --force_reserve_layer \
+        --encoder_type dinov2_txt \
 
 
     python llava/eval/eval_hallusionbench.py \

@@ -53,6 +53,7 @@ class LlavaMetaModel:
                 self.mm_projector = build_vision_projector(config, type="clip")
             
             
+
         if 'unpad' in getattr(config, 'mm_patch_merge_type', ''):
             self.image_newline = nn.Parameter(
                 torch.empty(config.hidden_size, dtype=self.dtype)
@@ -209,6 +210,7 @@ class LlavaMetaModel:
                 for p in self.dino_mm_projector.parameters():
                     p.requires_grad = True
 
+        # import pdb; pdb.set_trace()
         if pretrain_mm_mlp_adapter is not None: # we assume this will only be for CLIP mm_proj
             weights = torch.load(pretrain_mm_mlp_adapter, map_location='cpu')
             def get_w(weights, keyword):
@@ -225,7 +227,7 @@ class LlavaMetaModel:
 
             self.dino_mm_projector.load_state_dict(get_w(dino_mm_projector_weights, 'dino_mm_projector'))
             rank0_print("============= Successfully updated dino_mm_projector_weights =============")
-
+        # build the clip_attn_q, 
 def unpad_image(tensor, original_size):
     """
     Unpads a PyTorch tensor of a padded and resized image.
@@ -564,8 +566,7 @@ class LlavaMetaForCausalLM(ABC):
             if "clip" in encoder_type or "siglip" in encoder_type:
                 image_features_clip = self.encode_images_withclip(images, text_embeds=text_embeds_clip, text_attention_mask=text_attention_mask_clip, type_encoder="siglip" if "siglip" in encoder_type else "clip") # torch.Size([32, 576, 5120])
             if "dino" in encoder_type:
-                image_features_dino = self.encode_images_withdino(dino_images, text_embeds=text_embeds_dino, text_attention_mask=text_attention_mask_dino) # torch.Size([32, 256, 1024])
-        
+                    image_features_dino = self.encode_images_withdino(dino_images, text_embeds=text_embeds_dino, text_attention_mask=text_attention_mask_dino) # torch.Size([32, 256, 1024])
         # import pdb; pdb.set_trace()
 
         if getattr(self.config, 'tune_mm_mlp_adapter', False) and getattr(self.config, 'mm_use_im_start_end', False):
@@ -587,6 +588,20 @@ class LlavaMetaForCausalLM(ABC):
         input_ids = [cur_input_ids[cur_attention_mask] for cur_input_ids, cur_attention_mask in zip(input_ids, attention_mask)] # batch_size
         labels = [cur_labels[cur_attention_mask] for cur_labels, cur_attention_mask in zip(labels, attention_mask)] # batch_size
 
+        # Pre-compute attention-based clip+dino fusion for all images in one module call.
+        # Keeping this inside a single module forward helps ZeRO-3 offload keep
+        # parameter gather/release lifecycle consistent.
+        merged_features_all = None
+        if (
+            getattr(self.config, 'fusion_type', '') == "attn"
+            and ("clip" in encoder_type or "siglip" in encoder_type)
+            and "dino" in encoder_type
+            and image_features_clip is not None
+            and image_features_dino is not None
+        ):
+            model_ref = self.get_model()
+            if hasattr(model_ref, "clip_dino_fusion"):
+                merged_features_all = model_ref.clip_dino_fusion(image_features_clip, image_features_dino)
 
         new_input_embeds = []
         new_labels = []
@@ -625,8 +640,11 @@ class LlavaMetaForCausalLM(ABC):
                 cur_new_input_embeds.append(cur_input_embeds_no_im[i])
                 cur_new_labels.append(cur_labels_noim[i])
                 if i < num_images:
+                    
                     cur_image_features_clip = image_features_clip[cur_image_idx] if image_features_clip is not None else None
                     cur_image_features_dino = image_features_dino[cur_image_idx] if image_features_dino is not None else None
+
+                    img_idx = cur_image_idx
                     cur_image_idx += 1
                     # at this point cur_image_features_clip is torch.Size([576, 5120]) while cur_image_features_dino is torch.Size([252, 5120])
                     # import pdb; pdb.set_trace()
@@ -634,6 +652,7 @@ class LlavaMetaForCausalLM(ABC):
                         # NOTE: we can not interleave because diff number of patches! Thus, we choose to concate and mean pool along 0th dimension.
                         # We can not follow dino txt implementation because it compresses dino features unto one token.
                         fusion_type = self.config.fusion_type # can be mean_pooling, concate_upsample or cross_attention
+                        rank0_print(f"\n merging clip and dino features using {fusion_type}...")
                         if fusion_type == "mean_pooling":
                             dim = cur_image_features_dino.shape[0]
                             if int(dim ** 0.5)**2 == dim: # we have perfect square
@@ -670,12 +689,11 @@ class LlavaMetaForCausalLM(ABC):
                             cur_image_features_dino = cur_image_features_dino.reshape(cur_image_features_clip.shape) # torch.Size([252, 5120])
                             merged_features = torch.cat([cur_image_features_clip, cur_image_features_dino], dim=-1)
                         else:
-                            # Cross-attention fusion: Q=CLIP, K=V=DINOv2
-                            Q = cur_image_features_clip
-                            K = cur_image_features_dino
-                            V = cur_image_features_dino
-                            # [576, 5120] @ [5120, 252] = [576, 252] @ [252, 5120] = [576, 5120]
-                            merged_features = torch.softmax(Q @ K.transpose(-2, -1) / (K.shape[-1] ** 0.5), dim=-1) @ V # [576, 5120]
+                            if merged_features_all is None:
+                                raise RuntimeError(
+                                    "fusion_type='attn' requires clip_dino_fusion to be initialized."
+                                )
+                            merged_features = merged_features_all[img_idx]
                         cur_new_input_embeds.append(merged_features)
                         cur_new_labels.append(torch.full((merged_features.shape[0],), IGNORE_INDEX, device=cur_labels.device, dtype=cur_labels.dtype))
                     elif cur_image_features_clip is not None:

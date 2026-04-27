@@ -1,6 +1,6 @@
 #!/bin/bash
 set -euo pipefail
-
+export CUDA_VISIBLE_DEVICES=3
 MODEL_PATH="${MODEL_PATH:-liuhaotian/llava-v1.5-13b}"
 MODEL_BASE="${MODEL_BASE:-}"
 CONV_MODE="${CONV_MODE:-vicuna_v1}"
@@ -14,7 +14,7 @@ MAX_NEW_TOKENS="${MAX_NEW_TOKENS:-32}"
 # If non-empty, this list takes precedence over --model-path / MODEL_PATH.
 CHECKPOINT_ROOT="/shared/nas2/sstoica2/MoL/checkpoints"
 MODEL_PATHS=(
-    "${CHECKPOINT_ROOT}/llava-v1.5-13b-moe-finetune_2e-4_text-cond-attn-token-router_learnable-gate_dino_patch_layer_corrected_k=4"
+    "${CHECKPOINT_ROOT}/llava-v1.5-13b-moe-finetune_2e-4_text-cond-attn-token-router_dino_hybrid_corrected_k=2"
 )
 
 BENCHMARK_DIR="/shared/nas2/jk100/MoL/playground/data/eval/HRBench8K"
@@ -155,12 +155,14 @@ run_eval_for_model() {
         --conv-mode "${CONV_MODE}" \
         --benchmark hrbench8k \
         --mm_use_text_enc \
-        --use_router True \
-        --force_reserve_layer True \
-        --attn_level "patch_layer" \
-        --mm_use_text_enc \
-        --num_layers_to_choose 4 \
-        --conv-mode "${CONV_MODE}"
+        --attn_level "hybrid" \
+        --use_router \
+        --hybrid_reserve_mode disagreement_gate \
+        --hybrid_disagreement_metric kl_local_global \
+        --num_layers_to_choose 2 \
+        --force_reserve_layer \
+        --encoder_type dinov2_txt \
+
 
     python llava/eval/eval_hrbench.py \
         --question-file "${QUESTION_FILE}" \

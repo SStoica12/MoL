@@ -1,6 +1,7 @@
 #!/bin/bash
+export CUDA_VISIBLE_DEVICES=3
 set -euo pipefail
-# export CUDA_VISIBLE_DEVICES=1
+export CUDA_VISIBLE_DEVICES=1
 MODEL_PATH="${MODEL_PATH:-liuhaotian/llava-v1.5-13b}"
 MODEL_BASE="${MODEL_BASE:-}"
 CONV_MODE="${CONV_MODE:-vicuna_v1}"
@@ -14,16 +15,9 @@ MAX_NEW_TOKENS="${MAX_NEW_TOKENS:-128}"
 # If non-empty, this list takes precedence over --model-path / MODEL_PATH.
 CHECKPOINT_ROOT="/shared/nas2/sstoica2/MoL/checkpoints"
 MODEL_PATHS=(
-    # "liuhaotian/llava-v1.5-13b"
-    # "${CHECKPOINT_ROOT}/llava-v1.5-13b-moe-finetune_2e-4_router_learnable-gate_scaled-residual"
-    # "${CHECKPOINT_ROOT}/llava-v1.5-13b-moe-finetune_2e-4_text-cond-attn-layer-router_learnable-gate_scaled-residual"
-    # "${CHECKPOINT_ROOT}/llava-v1.5-13b-moe-finetune_2e-4_text-cond-attn-token-router_learnable-gate_scaled-residual"
-    # "${CHECKPOINT_ROOT}/llava-v1.5-13b-moe-finetune_2e-4_text-cond-film-router_learnable-gate_scaled-residual"
-    # "${CHECKPOINT_ROOT}/llava-v1.5-13b-moe-finetune_text-cond-attn-patchlayer-router_learnable-gate_lr1e-5-pretrain_lr2e-5-finetune"
-    # "${CHECKPOINT_ROOT}/llava-v1.5-13b-moe-finetune_text-cond-attn-patchlayer-router_learnable-gate_lr1e-5-pretrain_lr2e-5-finetune_k2"
-    # "${CHECKPOINT_ROOT}/llava-v1.5-13b-moe-finetune_text-cond-attn-patchlayer-router_learnable-gate_lr1e-5-pretrain_lr2e-5-finetune_k4"
-    # "${CHECKPOINT_ROOT}/llava-v1.5-13b-moe-finetune_text-cond-attn-patchlayer-router_learnable-gate_lr1e-5-pretrain_lr2e-5-finetune_k6"
-    "${CHECKPOINT_ROOT}/llava-v1.5-13b-moe-finetune_2e-4_text-cond-attn-token-router_learnable-gate_dino_patch_layer_corrected_k=4"
+    #"${CHECKPOINT_ROOT}/llava-v1.5-13b-moe-finetune_dino_no_router"
+    # "${CHECKPOINT_ROOT}/llava-v1.5-13b-moe-finetune_2e-4_text-cond-attn-token-router_dino_hybrid_corrected_k=1"
+    "${CHECKPOINT_ROOT}/llava-v1.5-13b-moe-finetune_2e-4_text-cond-attn-token-router_dino_hybrid_corrected_k=4"
 )
 
 BENCHMARK_DIR="/shared/nas2/jk100/MoL/playground/data/eval/vstar_bench"
@@ -148,13 +142,14 @@ run_eval_for_model() {
         --conv-mode "${CONV_MODE}" \
         --benchmark vstar \
         --mm_use_text_enc \
-        --force_reserve_layer True \
-        --attn_level "patch_layer" \
+        --attn_level "hybrid" \
+        --use_router \
+        --hybrid_reserve_mode disagreement_gate \
+        --hybrid_disagreement_metric kl_local_global \
         --num_layers_to_choose 4 \
-        --use_router True \
-        --encoder_type dinov2_txt
+        --force_reserve_layer \
+        --encoder_type dinov2_txt \
 
-        # --use_router False \
 
     python llava/eval/eval_vstar.py \
         --question-file "${QUESTION_FILE}" \

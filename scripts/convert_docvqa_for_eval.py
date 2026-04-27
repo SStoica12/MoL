@@ -4,32 +4,46 @@ import os
 from io import BytesIO
 from pathlib import Path
 
-import datasets as hf_datasets
 import pyarrow.parquet as pq
 from PIL import Image
 from tqdm.auto import tqdm
 
 
 def load_docvqa_dataset(args, benchmark_dir: Path):
-    cache_dir = args.cache_dir or str(benchmark_dir / ".hf_cache")
-    os.environ["HF_DATASETS_CACHE"] = cache_dir
-    hf_datasets.config.HF_DATASETS_CACHE = cache_dir
-
     if args.hf_dataset:
-        dataset = hf_datasets.load_dataset(
-            args.hf_dataset,
-            args.hf_config,
-            split=args.split,
+        try:
+            from huggingface_hub import snapshot_download
+        except ImportError as e:
+            raise ImportError(
+                "huggingface_hub is required for --hf-dataset. "
+                "Install it with `pip install huggingface_hub`."
+            ) from e
+
+        if args.cache_dir:
+            download_dir = Path(args.cache_dir).expanduser().resolve()
+        else:
+            download_dir = benchmark_dir / ".hf_snapshot"
+        download_dir.mkdir(parents=True, exist_ok=True)
+
+        print(f"Downloading dataset snapshot: {args.hf_dataset} -> {download_dir}")
+        snapshot_path = snapshot_download(
+            repo_id=args.hf_dataset,
+            repo_type="dataset",
             revision=args.hf_revision,
             token=args.hf_token,
-            cache_dir=cache_dir,
+            local_dir=str(download_dir),
+            allow_patterns=["**/*.parquet"],
         )
-        if hasattr(dataset, "column_names") and "image" in dataset.column_names:
-            try:
-                dataset = dataset.cast_column("image", hf_datasets.Image(decode=False))
-            except Exception:
-                pass
-        return dataset
+        snapshot_dir = Path(snapshot_path)
+        parquet_files = sorted(snapshot_dir.rglob(f"*{args.split}*.parquet"))
+        if not parquet_files:
+            parquet_files = sorted(snapshot_dir.rglob("*.parquet"))
+        if not parquet_files:
+            raise FileNotFoundError(f"No parquet files found in snapshot: {snapshot_dir}")
+        rows = []
+        for path in parquet_files:
+            rows.extend(pq.read_table(path).to_pylist())
+        return rows
 
     parquet_dir = Path(args.parquet_dir).expanduser().resolve() if args.parquet_dir else benchmark_dir
     parquet_files = sorted(parquet_dir.rglob("*.parquet"))
