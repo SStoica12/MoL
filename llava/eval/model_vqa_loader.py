@@ -15,7 +15,7 @@ import numpy as np
 from PIL import Image
 import math
 import types
-import matplotlib.pyplot as plt
+# import matplotlib.pyplot as plt
 
 from llava.constants import (
     IMAGE_TOKEN_INDEX,
@@ -140,6 +140,7 @@ class CustomDataset(Dataset):
         self.model_config = model_config
 
     def __getitem__(self, index):
+        # import pdb; pdb.set_trace()
         line = self.questions[index]
         image_files = line.get("images")
         #print("type(image_files): ", type(image_files), "image_file: ", image_files)
@@ -198,6 +199,8 @@ class CustomDataset(Dataset):
             image_tensor_clip = None
             image_tensor_dino = None
             image_sizes = [image.size for image in images]
+            # print("\n self.image_processor_clip is None: ", self.image_processor_clip is None)
+            # print("\n self.image_processor_dino is None: ", self.image_processor_dino is None)
             if self.image_processor_clip is not None:
                 # rank0_print("\n processing image with CLIP processor")
                 image_tensor_clip = process_images(images, self.image_processor_clip, self.model_config) #[0]
@@ -670,7 +673,7 @@ def _extract_router_metadata(model, router_name: str, batch_index: int = 0) -> d
     layer_counts = {str(i): int(c) for i, c in enumerate(counts) if int(c) > 0}
     total = sum(layer_counts.values()) or 1
     layer_freq = {k: v / total for k, v in layer_counts.items()}
-    # import pdb; pdb.set_trace()
+
     metadata = {
         "selection_mode": payload.get("selection_mode", "image_level"),
         "num_layers_available": num_layers_available,
@@ -731,6 +734,7 @@ def eval_model(args):
                                                             confidence_gate_slope= args.confidence_gate_slope,
                                                             hybrid_disagreement_metric= args.hybrid_disagreement_metric,  
                                                             hybrid_reserve_mode= args.hybrid_reserve_mode, 
+                                                            fusion_type= args.fusion_type,
                                                         )
     else:
         rank0_print("\n      not using router")
@@ -741,7 +745,7 @@ def eval_model(args):
 
     verify_loaded_model(model, model_path)
     # import sys; sys.exit(0)
-
+    # import pdb; pdb.set_trace()
     router_prob_buffers = setup_router_prob_capture(model) if use_router else {}
     # import sys; sys.exit(0)
     if args.get_masks == 1:
@@ -760,7 +764,7 @@ def eval_model(args):
     if 'plain' in model_name and 'finetune' not in model_name.lower() and 'mmtag' not in args.conv_mode:
         args.conv_mode = args.conv_mode + '_mmtag'
         rank0_print(f'It seems this is a plain model, but not using an mmtag prompt; auto switching to {args.conv_mode}.')
-
+    # import pdb; pdb.set_trace()
     data_loader = create_data_loader(
         questions,
         args.image_folder,
@@ -805,9 +809,9 @@ def eval_model(args):
                 use_cache=True,
                 encoder_type=args.encoder_type,
                 prompts=[cur_prompt] if not isinstance(cur_prompt, list) else cur_prompt,
-            )
-
-        outputs = tokenizer.batch_decode(output_ids, skip_special_tokens=True)[0].strip()
+            ) # for dino hybrid input ids are tensor([[  1, 360,   2]], device='cuda:0') 
+        # import pdb; pdb.set_trace()
+        outputs = tokenizer.batch_decode(output_ids, skip_special_tokens=True)[0].strip()  # so this becomes D.
         metadata = _extract_router_metadata(model, router_name)
 
         ans_id = shortuuid.uuid()
@@ -937,6 +941,7 @@ if __name__ == "__main__":
     parser.add_argument("--confidence_gate_slope", type=float, default=10.0, help="Slope for the confidence gate. Higher values make the gate more like a hard threshold, while lower values make it smoother.")
     parser.add_argument("--hybrid_reserve_mode", type=str, default="local_gate", help="When attn_level is hybrid, this determines how the reserve layer is used. Options: local_gate (use a local gate to combine the reserve layer with the router's selected experts), always_concat (always concatenate the reserve layer features with the vision features regardless of router selection), dynamic_concat (dynamically decide whether to concatenate the reserve layer based on the router's confidence or other criteria).")
     parser.add_argument("--hybrid_disagreement_metric", type=str, default="kl_local_global", help="When attn_level is hybrid, this determines how to measure disagreement between the local router (which chooses among the experts) and a global router (which has access to all features). Options: kl_local_global (compute KL divergence between the local router's distribution over experts and a global router's distribution that considers all features), confidence_gap (measure the gap in confidence between the local router's top choice and the global router's top choice), feature_distance (compute a distance metric between the features used by the local router and those used by the global router). This metric can be used to inform the hybrid reserve mode, for example by activating the reserve layer when disagreement is high.")
+    parser.add_argument("--fusion_type", type=str, default="attn", help="How to fuse the image features with the text features. Options: mean_pooling, concate_upsample, attn")
     args = parser.parse_args()
 
     eval_model(args)

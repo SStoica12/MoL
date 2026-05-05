@@ -8,14 +8,14 @@ TEMPERATURE="${TEMPERATURE:-0}"
 TOP_P="${TOP_P:-}"
 NUM_BEAMS="${NUM_BEAMS:-1}"
 MAX_NEW_TOKENS="${MAX_NEW_TOKENS:-256}"
-
+export OPENAI_API_KEY=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
 # Optional batch mode:
 # Paste checkpoint directories here to evaluate multiple models in one run.
 # If non-empty, this list takes precedence over --model-path / MODEL_PATH.
 CHECKPOINT_ROOT="/shared/nas2/sstoica2/MoL/checkpoints"
 MODEL_PATHS=(
     #"${CHECKPOINT_ROOT}/llava-v1.5-13b-moe-finetune_dino_no_router"
-    "${CHECKPOINT_ROOT}/llava-v1.5-13b-moe-finetune_2e-4_text-cond-attn-token-router_dino_hybrid_corrected_k=1"
+    "${CHECKPOINT_ROOT}/llava-v1.5-13b-moe-finetune_2e-4_text-cond-attn-token-router_learnable-gate_dino_patch_layer_corrected_k=2"
 )
 source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/model_paths_override.sh"
 load_model_paths_override
@@ -186,11 +186,11 @@ run_eval_for_model() {
         --max_new_tokens "${MAX_NEW_TOKENS}" \
         --conv-mode "${CONV_MODE}" \
         --mm_use_text_enc \
-        --attn_level "hybrid" \
+        --attn_level "patch_layer" \
         --use_router \
-        --hybrid_reserve_mode disagreement_gate \
-        --hybrid_disagreement_metric kl_local_global \
-        --num_layers_to_choose 1 \
+        --hybrid_reserve_mode local_gate \
+        --learnable_gate \
+        --num_layers_to_choose 2 \
         --force_reserve_layer \
         --encoder_type dinov2_txt \
 

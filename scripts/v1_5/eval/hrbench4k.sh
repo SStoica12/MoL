@@ -157,10 +157,10 @@ run_eval_for_model() {
         --conv-mode "${CONV_MODE}" \
         --benchmark hrbench4k \
         --mm_use_text_enc \
-        --attn_level "hybrid" \
+        --attn_level "patch_layer" \
         --use_router \
-        --hybrid_reserve_mode disagreement_gate \
-        --hybrid_disagreement_metric kl_local_global \
+        --hybrid_reserve_mode local_gate \
+        --learnable_gate \
         --num_layers_to_choose 2 \
         --force_reserve_layer \
         --encoder_type dinov2_txt \

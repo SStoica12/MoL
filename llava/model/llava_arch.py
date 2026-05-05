@@ -322,18 +322,19 @@ class LlavaMetaForCausalLM(ABC):
         if "dino" in encoder_type:
             dino_vision_tower = self.get_dino_vision_tower()
 
+        if (vision_tower is None or images is None or input_ids.shape[1] == 1) and \
+                (dino_vision_tower is None or dino_images is None or input_ids.shape[1] == 1):
+            return input_ids, position_ids, attention_mask, past_key_values, None, labels
+
         if dino_images is not None and dino_vision_tower is None:
             raise ValueError("DINO images provided but no DINO vision tower available.")
         if dino_vision_tower is not None and dino_images is None:
             raise ValueError("DINO Tower provided but no dino images found.")
         if images is None and vision_tower is not None:
+            # import pdb; pdb.set_trace()
             raise ValueError("CLIP images not provided but CLIP vision tower available.")
         if vision_tower is None and images is not None:
             raise ValueError("CLIP images provided but CLIP vision tower not available.")
-
-        if (vision_tower is None or images is None or input_ids.shape[1] == 1) and \
-                (dino_vision_tower is None or dino_images is None or input_ids.shape[1] == 1):
-            return input_ids, position_ids, attention_mask, past_key_values, None, labels
         
         text_embeds_clip = None
         text_embeds_dino = None
@@ -600,6 +601,7 @@ class LlavaMetaForCausalLM(ABC):
             and image_features_dino is not None
         ):
             model_ref = self.get_model()
+            # import pdb; pdb.set_trace()
             if hasattr(model_ref, "clip_dino_fusion"):
                 merged_features_all = model_ref.clip_dino_fusion(image_features_clip, image_features_dino)
 
@@ -652,7 +654,7 @@ class LlavaMetaForCausalLM(ABC):
                         # NOTE: we can not interleave because diff number of patches! Thus, we choose to concate and mean pool along 0th dimension.
                         # We can not follow dino txt implementation because it compresses dino features unto one token.
                         fusion_type = self.config.fusion_type # can be mean_pooling, concate_upsample or cross_attention
-                        rank0_print(f"\n merging clip and dino features using {fusion_type}...")
+                        # rank0_print(f"\n merging clip and dino features using {fusion_type}...")
                         if fusion_type == "mean_pooling":
                             dim = cur_image_features_dino.shape[0]
                             if int(dim ** 0.5)**2 == dim: # we have perfect square

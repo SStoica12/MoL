@@ -3,27 +3,27 @@ export DS_BUILD_CPU_ADAM=0
 
 export WANDB_ENTITY="uiucnlp"
 export WANDB_PROJECT="mixture-of-layers"
-export WANDB_NAME="MoL_router_choose_layers_finetune_text-cond-attn-token-router-gate_dino_hybrid_k=${NUM_LAYERS_TO_CHOOSE}"
+export WANDB_NAME="MoL_router_choose_layers_finetune_text-cond-attn-token-router-gate_dino_layer_k=${NUM_LAYERS_TO_CHOOSE}"
 export WANDB_MODE="online"  # ensure it uploads
 
-NUM_LAYERS_TO_CHOOSE=4
+NUM_LAYERS_TO_CHOOSE=1
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 DEEPSPEED_CONFIG=/shared/nas2/sstoica2/MoL/scripts/zero3_offload.json
 # DEEPSPEED_CONFIG="${DEEPSPEED_CONFIG:-${REPO_ROOT}/scripts/zero3.json}"
 DATA_PATH="${DATA_PATH:-/shared/nas2/sstoica2/LLaVA/playground/data/eval/llava_v1_5_mix665k.json}"
 IMAGE_FOLDER="${IMAGE_FOLDER:-/shared/nas2/sstoica2/LLaVA/playground/data/eval}"
-OUTPUT_DIR="${OUTPUT_DIR:-${REPO_ROOT}/checkpoints/llava-v1.5-13b-moe-finetune_2e-4_text-cond-attn-token-router_dino_hybrid_corrected_k=${NUM_LAYERS_TO_CHOOSE}}"
+OUTPUT_DIR="${OUTPUT_DIR:-${REPO_ROOT}/checkpoints/llava-v1.5-13b-moe-finetune_2e-4_text-cond-attn-token-router_dino_layer_k=${NUM_LAYERS_TO_CHOOSE}}"
 
 # deepspeed --include localhost:1
 #CUDA_VISIBLE_DEVICES=0,1,2,3 deepspeed
-CUDA_VISIBLE_DEVICES=0,1,2,3 deepspeed "${REPO_ROOT}/llava/train/train_mem_router.py" \
+deepspeed --include localhost:0,1,2,3 --master_port 29501 "${REPO_ROOT}/llava/train/train_mem_router.py" \
     --deepspeed "${DEEPSPEED_CONFIG}" \
     --model_name_or_path lmsys/vicuna-13b-v1.5 \
     --version v1 \
     --data_path "${DATA_PATH}" \
     --image_folder "${IMAGE_FOLDER}" \
     --vision_tower openai/clip-vit-large-patch14-336 \
-    --pretrain_dino_mm_mlp_adapter /shared/nas2/sstoica2/MoL/checkpoints/llava-v1.5-13b-moe-pretrain_text-cond-attn-token-router_dino_hybrid_k=2/dino_mm_projector.bin \
+    --pretrain_dino_mm_mlp_adapter /shared/nas2/sstoica2/MoL/checkpoints/llava-v1.5-13b-moe-pretrain_text-cond-attn-token-router_dino_layer_k=1/dino_mm_projector.bin \
     --mm_projector_type mlp2x_gelu \
     --freeze_residual_scaling_coef True \
     --mm_vision_select_layer -2 \
@@ -35,9 +35,8 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 deepspeed "${REPO_ROOT}/llava/train/train_mem_route
     --text_conditioning attention \
     --text_attention_type qk \
     --text_attention_dim 1024 \
-    --attn_level "hybrid" \
-    --hybrid_reserve_mode disagreement_gate \
-    --hybrid_disagreement_metric kl_local_global \
+    --attn_level "token" \
+    --hybrid_reserve_mode local_gate \
     --use_text_only_gating False \
     --text_pool mean \
     --text_scale 1.0 \
@@ -51,7 +50,7 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 deepspeed "${REPO_ROOT}/llava/train/train_mem_route
     --gradient_accumulation_steps 2 \
     --evaluation_strategy "no" \
     --save_strategy "steps" \
-    --save_steps 4000 \
+    --save_steps 2000 \
     --save_total_limit 100 \
     --learning_rate 2e-5 \
     --mm_projector_lr 2e-5 \
@@ -67,7 +66,7 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 deepspeed "${REPO_ROOT}/llava/train/train_mem_route
     --lazy_preprocess True \
     --force_reserve_layer True \
     --reserve_layer -2 \
-    --learnable_gate False \
+    --learnable_gate True \
     --confidence_gate False \
     --confidence_gate_threshold 0.6 \
     --confidence_gate_slope 10.0 \

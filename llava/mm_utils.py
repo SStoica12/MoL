@@ -176,7 +176,10 @@ def process_images(images, image_processor, model_cfg):
             image = process_anyres_image(image, image_processor, model_cfg.image_grid_pinpoints)
             new_images.append(image)
     else:
-        return image_processor(images, return_tensors='pt')['pixel_values']
+        try:
+            return image_processor(images, return_tensors='pt')['pixel_values']
+        except:
+            return image_processor(images) # for dino
     if all(x.shape == new_images[0].shape for x in new_images):
         new_images = torch.stack(new_images, dim=0)
     return new_images

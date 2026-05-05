@@ -285,7 +285,7 @@ class Router(nn.Module):
                 rank0_print("\n calculating patch layer load balancing loss...")
                 return self._load_balance_loss_patch_level(router_probs)
             raise ValueError(f"Unsupported auxiliary router payload kind: {kind!r}")
-        rank0_print("\n calculating image (no text conditioned) level balancing loss...")
+        rank0_print("\n calculating image level balancing loss...")
         return self._load_balance_loss_image_level(router_probs)
 
     def cap_layer_prob(self, router_probs: torch.Tensor, cap: float, layer: int, eps=1e-12):
@@ -447,11 +447,9 @@ class Router(nn.Module):
             # renormalize top-k probs to sum to (1 - reserve_layer_prob)
             remaining_mass = (1.0 - reserve_layer_prob).clamp(min=0.0)
             probs_sum = probs.sum(dim=-1, keepdim=True)
-            safe_probs_sum = probs_sum.clamp(min=1e-8)
             scale = torch.where(
                 probs_sum > 0,
                 remaining_mass.unsqueeze(-1) / probs_sum.clamp(min=1e-12),
-                remaining_mass.unsqueeze(-1) / safe_probs_sum,
                 torch.zeros_like(probs_sum),
             )
             # NOTE: we are just adjusting the scale of probs to sum to (1 - reserve_layer_prob), 
@@ -992,6 +990,7 @@ class TextConditionedRouter(Router):
                 device=original_hidden_states.device,
                 dtype=original_hidden_states.dtype,
             )
+            rank0_print("\n conditioned the hidden states to include text...")
             return original_hidden_states * attn.unsqueeze(-1) #[T, B]
 
         if self.attn_level == "layer":

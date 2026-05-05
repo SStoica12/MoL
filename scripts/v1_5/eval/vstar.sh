@@ -1,5 +1,5 @@
 #!/bin/bash
-export CUDA_VISIBLE_DEVICES=3
+export CUDA_VISIBLE_DEVICES=0
 set -euo pipefail
 export CUDA_VISIBLE_DEVICES=1
 MODEL_PATH="${MODEL_PATH:-liuhaotian/llava-v1.5-13b}"
@@ -17,7 +17,10 @@ CHECKPOINT_ROOT="/shared/nas2/sstoica2/MoL/checkpoints"
 MODEL_PATHS=(
     #"${CHECKPOINT_ROOT}/llava-v1.5-13b-moe-finetune_dino_no_router"
     # "${CHECKPOINT_ROOT}/llava-v1.5-13b-moe-finetune_2e-4_text-cond-attn-token-router_dino_hybrid_corrected_k=1"
-    "${CHECKPOINT_ROOT}/llava-v1.5-13b-moe-finetune_2e-4_text-cond-attn-token-router_dino_hybrid_corrected_k=4"
+    # "${CHECKPOINT_ROOT}/llava-v1.5-13b-moe-finetune_2e-4_text-cond-attn-token-router_dino_hybrid_corrected_k=4"
+    #"${CHECKPOINT_ROOT}/llava-v1.5-13b-moe-finetune_2e-4_text-cond-attn-token-router_dino_hybrid_corrected_k=4"
+    "${CHECKPOINT_ROOT}/llava-v1.5-13b-moe-finetune_2e-4_text-cond-attn-token-router_clip_dino_hybrid_k=2/checkpoint-4000"
+#    "/shared/nas2/sstoica2/MoL/checkpoints/llava-v1.5-13b-moe-finetune_2e-4_text-cond-attn-token-router_dino_hybrid_corrected_k=1/checkpoint-4000"
 )
 
 BENCHMARK_DIR="/shared/nas2/jk100/MoL/playground/data/eval/vstar_bench"
@@ -146,9 +149,9 @@ run_eval_for_model() {
         --use_router \
         --hybrid_reserve_mode disagreement_gate \
         --hybrid_disagreement_metric kl_local_global \
-        --num_layers_to_choose 4 \
+        --num_layers_to_choose 2 \
         --force_reserve_layer \
-        --encoder_type dinov2_txt \
+        --encoder_type clip-dinov2_txt \
 
 
     python llava/eval/eval_vstar.py \

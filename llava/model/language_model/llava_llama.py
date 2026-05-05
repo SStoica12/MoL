@@ -34,16 +34,37 @@ class ClipDinoCrossAttentionFusion(nn.Module):
         self.clip_attn_q = nn.Linear(hidden_size, hidden_size)
         self.dino_attn_k = nn.Linear(hidden_size, hidden_size)
         self.dino_attn_v = nn.Linear(hidden_size, hidden_size)
+        # we need to normalize the features. The 1/sqrt(hidden_size) attention 
+        # scale assumes the projected Q/K components have controlled variance. 
+        # Since CLIP/DINO projector outputs can have very different scales (max for 
+        # clip features is 148 while for dino it is 11), Q/K logits can overflow
+        #  without normalization. This causes instability in the dot product, which the scaling 
+        # (1/sqrt(hidden_size)) can not help, resulting in max of scores
+        # being inf, and attn becoming NaN. Since clip_fetaures and dino_features
+        # are outputs of MLP, we try and normalize using LayerNorm. We can not use RMSNorm
+        # due to required torch version < 2.4.
+        self.clip_features_norm = nn.LayerNorm(hidden_size)
+        self.dino_features_norm = nn.LayerNorm(hidden_size)
         self.scale = 1.0 / (hidden_size ** 0.5)
 
     def forward(self, clip_features: torch.Tensor, dino_features: torch.Tensor) -> torch.Tensor:
         # Run all fusion projections in one module call to keep ZeRO-3 param
         # gather/release aligned with module boundaries.
-        q = self.clip_attn_q(clip_features)
-        k = self.dino_attn_k(dino_features)
+        # q is now much better after normalizing: max is 7.656 and std is 1.42 instead of >=4. 
+        # import pdb; pdb.set_trace()
+        clip_features = self.clip_features_norm(clip_features)
+        dino_features = self.dino_features_norm(dino_features)
+        q = self.clip_attn_q(clip_features) # max can reach 148 while min can reach -133 if we do not normalize
+        k = self.dino_attn_k(dino_features) # max can reach 11 while min can reach -11. So clip is 10x if we do not normalize
         v = self.dino_attn_v(dino_features)
         scores = (q @ k.transpose(-2, -1)) * self.scale
         attn = torch.softmax(scores, dim=-1).to(device=dino_features.device, dtype=dino_features.dtype)
+        rank0_print("\n clip norm:", clip_features.mean().item(), clip_features.std().item(), clip_features.abs().max().item())
+        rank0_print("\n dino norm:", dino_features.mean().item(), dino_features.std().item(), dino_features.abs().max().item())
+        rank0_print("\n q:", q.mean().item(), q.std().item(), q.abs().max().item())
+        rank0_print("\n k:", k.mean().item(), k.std().item(), k.abs().max().item())
+        rank0_print("\n scores:", scores.mean().item(), scores.std().item(), scores.abs().max().item())
+        rank0_print("\n finite:", torch.isfinite(scores).all().item(), torch.isfinite(attn).all().item())
         return attn @ v
 
 
@@ -162,16 +183,17 @@ class LlavaLlamaForCausalLM(LlamaForCausalLM, LlavaMetaForCausalLM):
         super(LlamaForCausalLM, self).__init__(config)
 
         self.model = LlavaLlamaModel(config)
+        # import pdb; pdb.set_trace()
         enc_type = getattr(config, 'encoder_type', '')
         if ("clip" in enc_type or "siglip" in enc_type) and "dino" in enc_type:
             if getattr(config, 'fusion_type', '') == "attn":
                 self.model.clip_dino_fusion = ClipDinoCrossAttentionFusion(config.hidden_size)
-                # Keep aliases for existing checkpoint-loading/training code paths.
-                self.model.clip_attn_q = self.model.clip_dino_fusion.clip_attn_q
-                self.model.dino_attn_k = self.model.clip_dino_fusion.dino_attn_k
-                self.model.dino_attn_v = self.model.clip_dino_fusion.dino_attn_v
+                # # Keep aliases for existing checkpoint-loading/training code paths.
+                # self.model.clip_attn_q = self.model.clip_dino_fusion.clip_attn_q
+                # self.model.dino_attn_k = self.model.clip_dino_fusion.dino_attn_k
+                # self.model.dino_attn_v = self.model.clip_dino_fusion.dino_attn_v
                 rank0_print(f"Initialized attn projectors for clip+dino fusion: {config.fusion_type}")
-
+                rank0_print(f"params={sum(p.numel() for p in self.model.clip_dino_fusion.parameters())}")
         self.pretraining_tp = config.pretraining_tp
         self.vocab_size = config.vocab_size
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
@@ -302,23 +324,27 @@ class LlavaLlamaForCausalLM(LlamaForCausalLM, LlavaMetaForCausalLM):
             )
         else:
             inputs_embeds = self.get_model().embed_tokens(inputs)
-
-        return super().generate(
+        # import pdb; pdb.set_trace()
+        output = super().generate(
             position_ids=position_ids,
             attention_mask=attention_mask,
             inputs_embeds=inputs_embeds,
             **kwargs
         )
+        return output
 
     def prepare_inputs_for_generation(self, input_ids, past_key_values=None,
                                       inputs_embeds=None, **kwargs):
         images = kwargs.pop("images", None)
+        dino_images = kwargs.pop("dino_images", None)
         image_sizes = kwargs.pop("image_sizes", None)
         inputs = super().prepare_inputs_for_generation(
             input_ids, past_key_values=past_key_values, inputs_embeds=inputs_embeds, **kwargs
         )
         if images is not None:
             inputs['images'] = images
+        if dino_images is not None:
+            inputs['dino_images'] = dino_images
         if image_sizes is not None:
             inputs['image_sizes'] = image_sizes
         return inputs
@@ -404,7 +430,7 @@ class DoubleRouterLlavaLlamaForCausalLM(LlavaLlamaForCausalLM): # for both dino 
         assert hidden_states.ndim == 4
         # import pdb; pdb.set_trace()
         image_features = self.router_clip(hidden_states[1:, :, :, :], text_embeds=text_embeds, text_attention_mask=text_attention_mask, type=type_encoder) # do not want to include the embedding layer
-        assert image_features.requires_grad == True
+        # assert image_features.requires_grad == True
         # import pdb; pdb.set_trace()
         image_features = self.get_model().mm_projector(image_features) # Just one project?
         # assert image_features.requires_grad == True
@@ -523,6 +549,7 @@ class RouterLlavaLlamaForCausalLM(LlavaLlamaForCausalLM):
         assert hidden_states.ndim == 4
         # print("hidden_states : ", hidden_states.device)
         # print("self.router_dino parameters", next(self.router_dino.parameters()).device)
+        # import pdb; pdb.set_trace()
         # import pdb; pdb.set_trace()
         image_features = self.router_dino(hidden_states, text_embeds=text_embeds, text_attention_mask=text_attention_mask, type="dino") # these are currently on cuda: 0
         # assert image_features.requires_grad == True

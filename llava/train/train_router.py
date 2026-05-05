@@ -400,7 +400,7 @@ def safe_save_model_for_hf_trainer(trainer: transformers.Trainer,
         # Only save Adapter and scaling coefs
         # import pdb; pdb.set_trace()
         if hasattr(trainer.model, 'mm_projector') or hasattr(trainer.model.model, 'mm_projector'):
-            keys_to_match = ['mm_projector', 'router_clip', 'clip_attn_q', "dino_attn_k", "dino_attn_v"]
+            keys_to_match = ['mm_projector', 'router_clip', 'clip_dino_fusion'] #'clip_attn_q', "dino_attn_k", "dino_attn_v"]
             if getattr(trainer.args, "tune_residual_scaling_coef", False):
                 keys_to_match.extend(['scaling_coef'])
             if getattr(trainer.args, "use_im_start_end", False):
@@ -1017,6 +1017,7 @@ class LazySupervisedDataset(Dataset):
                 self.data_args)
         else:
             sources = copy.deepcopy([e["conversations"] for e in sources])
+        # print(f"\n sources : {sources}; for model: {self.for_model}")
         data_dict = preprocess(
             sources,
             self.tokenizer,
@@ -1382,6 +1383,7 @@ def train(attn_implementation=None):
         if not hasattr(model.config, 'mm_vision_select_feature'):
             model.config.mm_vision_select_feature = 'patch' # default or we get problems
         # router type
+        # import pdb; pdb.set_trace()
         if model_args.use_text_only_gating:
             router_cls = TextOnlyRouter
         elif model_args.use_text_conditioned_router:
@@ -1568,25 +1570,23 @@ def train(attn_implementation=None):
             model.router_clip.load_state_dict(get_w(weights, 'router_clip'))
             rank0_print(" \n loaded router_clip weights...")
             
-            for attn_name in ("clip_attn_q", "dino_attn_k", "dino_attn_v"):
-                attn_mod = getattr(model, attn_name, None)
-                if attn_mod is None and hasattr(model, "get_model"):
-                    attn_mod = getattr(model.get_model(), attn_name, None)
-                if attn_mod is not None:
-                    attn_w = {k.split(f"model.{attn_name}.")[1]: v for k, v in weights.items() if f"model.{attn_name}." in k}
-                    if attn_w:
-                        try:
-                            attn_mod.load_state_dict(attn_w)
-                        except:
-                            rank0_print("\n problem with clip_attn_q, dino_attn_k, dino_attn_v loading weights. This may result in problems during training of inflight parameters.")
-                            # if we are here then that means that weights from llm were offloaded
-                            # to the cpu, including our attn_modules
-                            from deepspeed import zero
-                            with zero.GatheredParameters(list(attn_mod.parameters()), modifier_rank=0):
-                                for pname, param in attn_mod.named_parameters():
-                                    if pname in attn_w:
-                                        param.data.copy_(attn_w[pname])
-                        rank0_print(f"Loaded pretrained weights for {attn_name}")
+            # import pdb; pdb.set_trace()
+            attn_mode =  getattr(model.get_model(), "clip_dino_fusion", None)
+            if model_args.fusion_type == "attn" and ("clip" in model_args.encoder_type or "siglip" in model_args.encoder_type) and "dino" in model_args.encoder_type:
+                assert attn_mode is not None, "we are using attn to merge clip and dino features but clip_dino_fusion is not Initailized"
+            if attn_mode is not None: 
+                for attn_name in ("clip_attn_q", "dino_attn_k", "dino_attn_v", "clip_features_norm", "dino_features_norm"):
+                    attn_mode_layer = getattr(attn_mode, attn_name)
+                    attn_w = {k.split(f"model.clip_dino_fusion.{attn_name}.")[1]: v for k, v in weights.items() if f"model.clip_dino_fusion.{attn_name}." in k}
+                    try:
+                        attn_mode_layer.load_state_dict(attn_w)
+                    except:
+                        from deepspeed import zero
+                        with zero.GatheredParameters(list(attn_mode_layer.parameters()), modifier_rank=0):
+                            for pname, param in attn_mode_layer.named_parameters():
+                                if pname in attn_w:
+                                    param.data.copy_(attn_w[pname])
+                                    rank0_print(f"Loaded pretrained weights for {attn_name}")
 
         # import pdb; pdb.set_trace()
         if model_args.pretrain_dino_mm_mlp_adapter is not None:
@@ -1635,18 +1635,29 @@ def train(attn_implementation=None):
                     if 'scaling_coef' not in n:
                         p.requires_grad_(True)
         
-        for attn_name in ("clip_attn_q", "dino_attn_k", "dino_attn_v"):
-            attn_mod = getattr(model, attn_name, None)
-            if attn_mod is None and hasattr(model, "get_model"):
-                attn_mod = getattr(model.get_model(), attn_name, None)
-            if attn_mod is not None:
-                for p in attn_mod.parameters():
-                    p.requires_grad = True
+        attn_mode =  getattr(model.get_model(), "clip_dino_fusion", None)
+        if model_args.fusion_type == "attn" and ("clip" in model_args.encoder_type or "siglip" in model_args.encoder_type) and "dino" in model_args.encoder_type:
+            assert attn_mode is not None, "we are using attn to merge clip and dino features but clip_dino_fusion is not Initailized"
+        # import pdb; pdb.set_trace()
+        if attn_mode is not None: 
+            for attn_name in ("clip_attn_q", "dino_attn_k", "dino_attn_v", "clip_features_norm", "dino_features_norm"):
+                attn_mod = getattr(attn_mode, attn_name, None)
+                if attn_mod is None and hasattr(model, "get_model"):
+                    attn_mod = getattr(model.get_model(), attn_name, None)
+                if attn_mod is not None:
+                    for p in attn_mod.parameters():
+                        p.requires_grad = True
 
         if model_args.tune_mm_mlp_adapter:
+            # import pdb; pdb.set_trace()
             for n,p in model.named_parameters():
                 if 'router' not in n:
                     p.requires_grad_(False)
+            # for routers to not have gradients false
+            if hasattr(model, "router_dino"):
+                model.router_dino.requires_grad_(True)
+            if hasattr(model, "router_clip"):
+                model.router_clip.requires_grad_(True)
             # model.requires_grad_(False)
             if hasattr(model.get_model(), "mm_projector"):
                 for p in model.get_model().mm_projector.parameters():
@@ -1655,7 +1666,10 @@ def train(attn_implementation=None):
             if hasattr(model.get_model(), "dino_mm_projector"):
                 for p in model.get_model().dino_mm_projector.parameters():
                         p.requires_grad = True
-            
+            # import pdb; pdb.set_trace()
+            if hasattr(model.get_model(), "clip_dino_fusion"):
+                for p in model.get_model().clip_dino_fusion.parameters():
+                    p.requires_grad = True
 
         if model_args.tune_residual_scaling_coef:
             if vision_tower is not None:
@@ -1764,6 +1778,53 @@ def train(attn_implementation=None):
         assert 'vision_tower' not in n
     print("TRAINABLE parameters:",
       [n for n,p in model.named_parameters() if p.requires_grad])
+
+    for n,p in model.named_parameters():
+        if p.requires_grad:
+            assert "vision_tower" not in n
+
+    # ---- DIAGNOSTIC BLOCK: remove after confirming ----
+    if local_rank == 0:
+        m = model.get_model()
+        # 1. Confirm clip_dino_fusion is under ZeRO-3 (has ds_id)
+        print("\n[pre-DS] fusion module param status:")
+        if hasattr(m, "clip_dino_fusion"):
+            for n, p in m.clip_dino_fusion.named_parameters():
+                ds_id = getattr(p, "ds_id", "MISSING — not under ZeRO-3!")
+                print(f"  clip_dino_fusion.{n}: ds_id={ds_id}")
+        
+        # 2. Check alias ds_ids vs canonical paths (true duplicate check)
+        rank0_print("\n Check alias ds_ids vs canonical paths (true duplicate check)...")
+        for alias_name in ("clip_attn_q", "dino_attn_k", "dino_attn_v"):
+            alias_mod = getattr(m, alias_name, None)
+            canonical_mod = getattr(m.clip_dino_fusion, alias_name, None) if hasattr(m, "clip_dino_fusion") else None
+            if alias_mod is not None and canonical_mod is not None:
+                alias_w_id    = getattr(alias_mod.weight, "ds_id", None)
+                canonical_w_id = getattr(canonical_mod.weight, "ds_id", None)
+                print(f"  {alias_name}: alias ds_id={alias_w_id}, canonical ds_id={canonical_w_id}, "
+                    f"same_object={alias_mod is canonical_mod}, ds_id_match={alias_w_id==canonical_w_id}")
+
+        # 3. Check for true ZeRO-3 ds_id conflicts across full model
+        rank0_print("\n Check for true ZeRO-3 ds_id conflicts across full model...")
+        seen_ds_ids = {}
+        for n, p in model.named_parameters():
+            ds_id = getattr(p, "ds_id", None)
+            if ds_id is None:
+                continue
+            if ds_id in seen_ds_ids:
+                print(f"  [TRUE ds_id CONFLICT] {n} shares ds_id={ds_id} with {seen_ds_ids[ds_id]}")
+            else:
+                seen_ds_ids[ds_id] = n
+    
+    if local_rank == 0:
+        id_to_name = {getattr(p, 'ds_id', None): n
+                    for n, p in model.named_parameters()
+                    if getattr(p, 'ds_id', None) is not None}
+        for target_id in [362, 364, 366, 1629, 1631]:
+            print(f"  ds_id={target_id} → {id_to_name.get(target_id, 'NOT FOUND')}")
+
+    # ---- END DIAGNOSTIC BLOCK ----
+    
     # import sys; sys.exit(0)
     # ========================= UNCOMMENT ========================= #
     if list(pathlib.Path(training_args.output_dir).glob("checkpoint-*")):

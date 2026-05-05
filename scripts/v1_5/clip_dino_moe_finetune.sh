@@ -3,16 +3,16 @@ export DS_BUILD_CPU_ADAM=0
 
 export WANDB_ENTITY="uiucnlp"
 export WANDB_PROJECT="mixture-of-layers"
-export WANDB_NAME="MoL_router_choose_layers_finetune_text-cond-attn-token-router-gate_clip_dino_hybrid_k=${NUM_LAYERS_TO_CHOOSE}"
+export WANDB_NAME="MoL_router_choose_layers_finetune_text-cond-attn-token-router-gate_clip_dino_hybrid_k=${NUM_LAYERS_TO_CHOOSE}_corrected_attn"
 export WANDB_MODE="online"  # ensure it uploads
 
-NUM_LAYERS_TO_CHOOSE=2
+NUM_LAYERS_TO_CHOOSE=1
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 DEEPSPEED_CONFIG=/shared/nas2/sstoica2/MoL/scripts/zero3_offload.json
 # DEEPSPEED_CONFIG="${DEEPSPEED_CONFIG:-${REPO_ROOT}/scripts/zero3.json}"
 DATA_PATH="${DATA_PATH:-/shared/nas2/sstoica2/LLaVA/playground/data/eval/llava_v1_5_mix665k.json}"
 IMAGE_FOLDER="${IMAGE_FOLDER:-/shared/nas2/sstoica2/LLaVA/playground/data/eval}"
-OUTPUT_DIR="${OUTPUT_DIR:-${REPO_ROOT}/checkpoints/llava-v1.5-13b-moe-finetune_2e-4_text-cond-attn-token-router_clip_dino_hybrid_k=${NUM_LAYERS_TO_CHOOSE}}"
+OUTPUT_DIR="${OUTPUT_DIR:-${REPO_ROOT}/checkpoints/llava-v1.5-13b-moe-finetune_2e-4_text-cond-attn-token-router_clip_dino_hybrid_k=${NUM_LAYERS_TO_CHOOSE}_corrected_attn}"
 
 # deepspeed --include localhost:1
 #CUDA_VISIBLE_DEVICES=0,1,2,3 deepspeed
@@ -23,8 +23,8 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 deepspeed "${REPO_ROOT}/llava/train/train_mem_route
     --data_path "${DATA_PATH}" \
     --image_folder "${IMAGE_FOLDER}" \
     --vision_tower openai/clip-vit-large-patch14-336 \
-    --pretrain_mm_mlp_adapter /shared/nas2/sstoica2/MoL/checkpoints/llava-v1.5-13b-moe-pretrain_text-cond-attn-token-router_clip_dino_hybrid_k=2/mm_projector.bin \
-    --pretrain_dino_mm_mlp_adapter /shared/nas2/sstoica2/MoL/checkpoints/llava-v1.5-13b-moe-pretrain_text-cond-attn-token-router_clip_dino_hybrid_k=2/dino_mm_projector.bin \
+    --pretrain_mm_mlp_adapter /shared/nas2/sstoica2/MoL/checkpoints/llava-v1.5-13b-moe-pretrain_text-cond-attn-token-router_clip_dino_hybrid_k=1_normalized_attn/mm_projector.bin \
+    --pretrain_dino_mm_mlp_adapter /shared/nas2/sstoica2/MoL/checkpoints/llava-v1.5-13b-moe-pretrain_text-cond-attn-token-router_clip_dino_hybrid_k=1_normalized_attn/dino_mm_projector.bin \
     --mm_projector_type mlp2x_gelu \
     --freeze_residual_scaling_coef True \
     --mm_vision_select_layer -2 \

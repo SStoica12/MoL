@@ -1,6 +1,6 @@
 #!/bin/bash
 set -euo pipefail
-export CUDA_VISIBLE_DEVICES=3
+export CUDA_VISIBLE_DEVICES=2
 MODEL_PATH="${MODEL_PATH:-liuhaotian/llava-v1.5-13b}"
 MODEL_BASE="${MODEL_BASE:-}"
 CONV_MODE="${CONV_MODE:-vicuna_v1}"
@@ -14,7 +14,7 @@ MAX_NEW_TOKENS="${MAX_NEW_TOKENS:-64}"
 # If non-empty, this list takes precedence over --model-path / MODEL_PATH.
 CHECKPOINT_ROOT="/shared/nas2/sstoica2/MoL/checkpoints"
 MODEL_PATHS=(
-    "${CHECKPOINT_ROOT}/llava-v1.5-13b-moe-finetune_2e-4_text-cond-attn-token-router_dino_hybrid_corrected_k=2"
+    "${CHECKPOINT_ROOT}/llava-v1.5-13b-moe-finetune_2e-4_text-cond-attn-token-router_learnable-gate_dino_patch_layer_corrected_k=2"
     # "${CHECKPOINT_ROOT}/llava-v1.5-13b-moe-finetune_dino_no_router"
 )
 
@@ -177,10 +177,10 @@ run_eval_for_model() {
         --conv-mode "${CONV_MODE}" \
         --benchmark mmmu \
         --mm_use_text_enc \
-        --attn_level "hybrid" \
+        --attn_level "patch_layer" \
         --use_router \
-        --hybrid_reserve_mode disagreement_gate \
-        --hybrid_disagreement_metric kl_local_global \
+        --hybrid_reserve_mode local_gate \
+        --learnable_gate \
         --num_layers_to_choose 2 \
         --force_reserve_layer \
         --encoder_type dinov2_txt \

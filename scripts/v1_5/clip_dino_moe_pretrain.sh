@@ -2,8 +2,8 @@
 
 export WANDB_ENTITY="uiucnlp"
 export WANDB_PROJECT="mixture-of-layers"
-NUM_LAYERS_TO_CHOOSE=2
-export WANDB_NAME="MoL_clip_dino_pretrain_text-cond-attn-token-router_pretrain_hybrid_k=${NUM_LAYERS_TO_CHOOSE}"
+NUM_LAYERS_TO_CHOOSE=1
+export WANDB_NAME="MoL_clip_dino_pretrain_text-cond-attn-token-router_pretrain_hybrid_k=${NUM_LAYERS_TO_CHOOSE}_normalized_attn"
 export WANDB_MODE="online"  # ensure it uploads
 # export WANDB_DIR="/shared/nas2/jk100/MoL/scripts/v1_5/wandb" - where to store wandb logs
 
@@ -12,7 +12,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 DEEPSPEED_CONFIG="${DEEPSPEED_CONFIG:-${REPO_ROOT}/scripts/zero2.json}"
 DATA_PATH="${DATA_PATH:-/shared/nas/data/m1/sstoica2/.cache/huggingface/.cache/huggingface/datasets--Blip/blip_laion_cc_sbu_558k.json}"
 IMAGE_FOLDER="${IMAGE_FOLDER:-/shared/nas/data/m1/sstoica2/.cache/huggingface/.cache/huggingface/datasets--Blip/images}"
-OUTPUT_DIR="${OUTPUT_DIR:-${REPO_ROOT}/checkpoints/llava-v1.5-13b-moe-pretrain_text-cond-attn-token-router_clip_dino_hybrid_k=${NUM_LAYERS_TO_CHOOSE}}"
+OUTPUT_DIR="${OUTPUT_DIR:-${REPO_ROOT}/checkpoints/llava-v1.5-13b-moe-pretrain_text-cond-attn-token-router_clip_dino_hybrid_k=${NUM_LAYERS_TO_CHOOSE}_normalized_attn}"
 MASTER_PORT="${MASTER_PORT:-29602}"
 # CUDA_VISIBLE_DEVICES=0,1,2,3 deepspeed
 # deepspeed --include localhost:0

@@ -5,6 +5,27 @@ import os
 import numpy as np
 from safetensors import safe_open
 
+
+
+from pathlib import Path
+from safetensors import safe_open
+
+model_dir = Path("/shared/nas2/sstoica2/MoL/checkpoints/llava-v1.5-13b-moe-finetune_2e-4_text-cond-attn-token-router_clip_dino_hybrid_k=2/checkpoint-4000")  # change this
+out_path = model_dir / "safetensors_keys.txt"
+
+with open(out_path, "w") as out:
+    for shard_path in sorted(model_dir.glob("model-*-of-*.safetensors")):
+        out.write(f"\n--- {shard_path.name} ---\n")
+
+        with safe_open(shard_path, framework="pt", device="cpu") as f:
+            keys = list(f.keys())
+            out.write(f"Number of tensors: {len(keys)}\n")
+            for key in keys:
+                out.write(key + "\n")
+
+print(f"Saved keys to: {out_path}")
+
+
 # dists = np.load("/shared/nas2/sstoica2/MoL/playground/router_distribution/router_probs_gqa_router_dino_distributin.npy") # (4192, 24)
 # import pdb; pdb.set_trace()
 

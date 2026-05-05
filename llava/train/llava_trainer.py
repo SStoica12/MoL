@@ -369,7 +369,7 @@ class LLaVATrainer(Trainer):
             inputs['dino_images'] = dino_images
             images = None
             inputs['images'] = images
-
+        import pdb; pdb.set_trace()
         outputs = model(**inputs)
         loss = outputs.loss
         assert torch.isnan(loss) == False, "Loss is NaN!"
@@ -608,7 +608,7 @@ class RouterLLaVATrainer(Trainer):
             self._save_optimizer_and_scheduler(output_dir)  # NOTE: save optimizer and scheduler states with deepspeed
 
             # Only save Adapter
-            keys_to_match = ['mm_projector', 'vision_resampler', 'router_clip']
+            keys_to_match = ['mm_projector', 'vision_resampler', 'router_clip', 'clip_dino_fusion']
             if getattr(self.args, "use_im_start_end", False):
                 keys_to_match.extend(['embed_tokens', 'embed_in'])
 
