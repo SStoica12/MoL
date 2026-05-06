@@ -78,7 +78,7 @@ class ScaledResidualEncoderLayer(nn.Module):
         self,
         hidden_states: torch.Tensor,
         attention_mask: torch.Tensor,
-        causal_attention_mask: torch.Tensor, 
+        causal_attention_mask: torch.Tensor,
         output_attentions: Optional[bool] = False,
         **kwargs: Unpack[TransformersKwargs],
     ) -> torch.FloatTensor:
@@ -201,7 +201,7 @@ class CLIPVisionTower(nn.Module):
         self.image_processor = CLIPImageProcessor.from_pretrained(self.vision_tower_name)
         self.vision_tower = CLIPVisionModel.from_pretrained(self.vision_tower_name, device_map=device_map)
         self._register_delta_hooks()
-        
+
         # Replace layers BEFORE freezing to ensure new parameters are properly registered
         layers = self.vision_tower.vision_model.encoder.layers
         for i in range(len(layers)):
@@ -244,6 +244,7 @@ class CLIPVisionTower(nn.Module):
             image_forward_outs = self.vision_tower(images.to(device=self.device, dtype=self.dtype), output_hidden_states=True)
             image_features = self.feature_select(image_forward_outs).to(images.dtype)
         # pdb.set_trace() # placed pdb here to find where the project was getting called -- press u multiple times
+        import pdb; pdb.set_trace()
         return image_features
 
     @property
@@ -276,26 +277,26 @@ class CLIPVisionTower(nn.Module):
     @property
     def num_patches(self):
         return (self.config.image_size // self.config.patch_size) ** 2
-    
 
-class CLIPVisionTextTower(CLIPVisionTower):    
+
+class CLIPVisionTextTower(CLIPVisionTower):
     def __init__(self, vision_tower, args, delay_load=False):
         self.text_tower = None
         self.text_tokenizer = None
         super().__init__(vision_tower, args, delay_load)
-        
+
     def load_model(self, device_map=None):
         super().load_model(device_map=device_map)
         if self.text_tower is None:
             self.text_tokenizer = CLIPTokenizer.from_pretrained(self.vision_tower_name)
             self.text_tower = CLIPTextModel.from_pretrained(self.vision_tower_name, device_map=device_map)
             self.text_tower.requires_grad_(False)
-    
+
     def get_text_tower(self):  # NOTE: this will be used to return a handler to self.text_tower
         if self.text_tower is None:
             raise RuntimeError("Text tower not loaded. Please call load_model() first.")
         return self.text_tower
-    
+
     def encode_text(self, input_ids, attention_mask=None):
         text_out = self.get_text_tower()(
             input_ids=input_ids,
@@ -303,7 +304,7 @@ class CLIPVisionTextTower(CLIPVisionTower):
             output_hidden_states=True,
         )
         return text_out.last_hidden_state
-    
+
 
 class CLIPVisionTowerS2(CLIPVisionTower):
     def __init__(self, vision_tower, args, delay_load=False):
@@ -334,7 +335,7 @@ class CLIPVisionTowerS2(CLIPVisionTower):
         self.image_processor = CLIPImageProcessor.from_pretrained(self.vision_tower_name)
         self.vision_tower = CLIPVisionModel.from_pretrained(self.vision_tower_name, device_map=device_map)
         self._register_delta_hooks()
-        
+
         # Replace layers BEFORE freezing to ensure new parameters are properly registered
         layers = self.vision_tower.vision_model.encoder.layers
         for i in range(len(layers)):

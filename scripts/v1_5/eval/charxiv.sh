@@ -30,6 +30,10 @@ MODEL_PATHS=(
 source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/model_paths_override.sh"
 load_model_paths_override
 
+eval_ckpt_name() {
+    basename "${1%/}"
+}
+
 BENCHMARK_DIR="${BENCHMARK_DIR:-./playground/data/eval/CharXiv}"
 HF_DATASET="${HF_DATASET:-princeton-nlp/CharXiv}"
 HF_REVISION="${HF_REVISION:-main}"
@@ -209,7 +213,7 @@ if [[ ${#MODEL_PATHS[@]} -gt 0 ]]; then
     output_root="${OUTPUT_DIR:-${BENCHMARK_DIR}/answers/${SPLIT}}"
     mkdir -p "${output_root}"
     for model_path in "${MODEL_PATHS[@]}"; do
-        ckpt_name_local="$(basename "${model_path}")"
+        ckpt_name_local="$(eval_ckpt_name "${model_path}")"
         answers_file_local="${output_root}/${ckpt_name_local}/predictions.jsonl"
         summary_file_local="${output_root}/${ckpt_name_local}/summary.json"
         detail_file_local="${output_root}/${ckpt_name_local}/details.jsonl"
@@ -218,7 +222,7 @@ if [[ ${#MODEL_PATHS[@]} -gt 0 ]]; then
     done
 else
     if [[ -z "${CKPT_NAME}" ]]; then
-        CKPT_NAME="$(basename "${MODEL_PATH}")"
+        CKPT_NAME="$(eval_ckpt_name "${MODEL_PATH}")"
     fi
     if [[ -z "${OUTPUT_DIR}" ]]; then
         OUTPUT_DIR="${BENCHMARK_DIR}/answers/${SPLIT}/${CKPT_NAME}"

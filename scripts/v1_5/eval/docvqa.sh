@@ -1,6 +1,5 @@
 #!/bin/bash
 set -euo pipefail
-
 MODEL_PATH="${MODEL_PATH:-liuhaotian/llava-v1.5-13b}"
 MODEL_BASE="${MODEL_BASE:-}"
 CONV_MODE="${CONV_MODE:-vicuna_v1}"
@@ -12,8 +11,10 @@ MAX_NEW_TOKENS="${MAX_NEW_TOKENS:-32}"
 # Optional batch mode:
 # Paste checkpoint directories here to evaluate multiple models in one run.
 # If non-empty, this list takes precedence over --model-path / MODEL_PATH.
-CHECKPOINT_ROOT="/shared/nas2/jk100/MoL/checkpoints"
+CHECKPOINT_ROOT="${CHECKPOINT_ROOT:-/shared/nas2/jk100/MoL/checkpoints}"
 MODEL_PATHS=(
+    # "${CHECKPOINT_ROOT}/llava-v1.5-13b-moe-finetune_dino_no_router"
+    # "${CHECKPOINT_ROOT}/llava-v1.5-13b-moe-finetune_2e-4_text-cond-attn-token-router_dino_hybrid_corrected_k=2"
     # "liuhaotian/llava-v1.5-13b"
     # "${CHECKPOINT_ROOT}/llava-v1.5-13b-moe-finetune_2e-4_router_learnable-gate_scaled-residual"
     # "${CHECKPOINT_ROOT}/llava-v1.5-13b-moe-finetune_2e-4_text-cond-attn-layer-router_learnable-gate_scaled-residual"
@@ -175,7 +176,15 @@ run_eval_for_model() {
         "${TOP_P_ARGS[@]}" \
         --num_beams "${NUM_BEAMS}" \
         --max_new_tokens "${MAX_NEW_TOKENS}" \
-        --conv-mode "${CONV_MODE}"
+        --conv-mode "${CONV_MODE}" \
+         --mm_use_text_enc \
+        --attn_level "hybrid" \
+        --use_router \
+        --hybrid_reserve_mode disagreement_gate \
+        --hybrid_disagreement_metric kl_local_global \
+        --num_layers_to_choose 2 \
+        --force_reserve_layer \
+        --encoder_type dinov2_txt
 
     python llava/eval/eval_docvqa.py \
         --question-file "${QUESTION_FILE}" \

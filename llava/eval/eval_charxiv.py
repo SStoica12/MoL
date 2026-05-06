@@ -1,12 +1,17 @@
 import argparse
 import json
 import math
+import os
 import re
+import sys
 from collections import defaultdict
 from pathlib import Path
 
-from llava.eval.openai_compat import OpenAICompatError, chat_completion_with_retry, create_client
-
+try:
+    from llava.eval.openai_compat import OpenAICompatError, chat_completion_with_retry, create_client
+except ImportError:
+    sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
+    from llava.eval.openai_compat import OpenAICompatError, chat_completion_with_retry, create_client
 
 NOT_APPLICABLE_PATTERNS = (
     "not applicable",

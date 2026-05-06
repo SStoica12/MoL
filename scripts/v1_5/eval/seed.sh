@@ -1,6 +1,5 @@
 #!/bin/bash
 set -euo pipefail
-
 MODEL_PATH="${MODEL_PATH:-liuhaotian/llava-v1.5-13b}"
 CONV_MODE="${CONV_MODE:-vicuna_v1}"
 TEMPERATURE="${TEMPERATURE:-0}"
@@ -20,8 +19,9 @@ BREAKFAST_DIR="${BREAKFAST_DIR:-${SEED_ROOT}/videos/BreakfastII_15fps_qvga_sync}
 # Optional batch mode:
 # Paste checkpoint directories here to evaluate multiple models in one run.
 # If non-empty, this list takes precedence over MODEL_PATH.
-CHECKPOINT_ROOT="/shared/nas2/jk100/MoL/checkpoints"
+CHECKPOINT_ROOT="${CHECKPOINT_ROOT:-/shared/nas2/jk100/MoL/checkpoints}"
 MODEL_PATHS=(
+    # "${CHECKPOINT_ROOT}/llava-v1.5-13b-moe-finetune_dino_no_router"
     "liuhaotian/llava-v1.5-13b"
     "${CHECKPOINT_ROOT}/llava-v1.5-13b-moe-finetune_2e-4_router_learnable-gate_scaled-residual"
     "${CHECKPOINT_ROOT}/llava-v1.5-13b-moe-finetune_2e-4_text-cond-attn-layer-router_learnable-gate_scaled-residual"

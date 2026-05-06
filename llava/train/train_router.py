@@ -35,8 +35,8 @@ from llava.model.router import Router, TextConditionedRouter, TextOnlyRouter
 from llava import conversation as conversation_lib
 from llava.model import *
 from llava.mm_utils import tokenizer_image_token
-from llava.model.language_model.llava_llama import RouterLlavaLlamaForCausalLM
-from llava.model.language_model.llava_mpt import RouterLlavaMptForCausalLM
+from llava.model.language_model.llava_llama import RouterLlavaLlamaForCausalLM, DoubleRouterLlavaLlamaForCausalLM
+from llava.model.language_model.llava_mpt import RouterLlavaMptForCausalLM, DoubleRouterLlavaMptForCausalLM
 from PIL import Image
 
 
@@ -63,6 +63,7 @@ class ModelArguments:
     vision_tower: Optional[str] = field(default=None)
     mm_vision_select_layer: Optional[int] = field(default=-1)   # default to the last layer
     pretrain_mm_mlp_adapter: Optional[str] = field(default=None) # will include scaling coefs
+    pretrain_dino_mm_mlp_adapter: Optional[str] = field(default=None)
     mm_projector_type: Optional[str] = field(default='linear')
     mm_use_im_start_end: bool = field(default=False)
     mm_use_im_patch_token: bool = field(default=True)
@@ -93,6 +94,8 @@ class ModelArguments:
     confidence_gate: bool = False
     confidence_gate_threshold: float = 0.6
     confidence_gate_slope: float = 10.0
+    encoder_type: str = "clip"
+    fusion_type: str = "cross_attn" # options: cross_attn, mean_pooling, concate_upsample
 
 
 @dataclass
@@ -139,6 +142,7 @@ class TrainingArguments(transformers.TrainingArguments):
     lora_weight_path: str = ""
     lora_bias: str = "none"
     mm_projector_lr: Optional[float] = None
+    dino_mm_projector_lr: Optional[float] = None
     router_lr: Optional[float] = None
     group_by_modality_length: bool = field(default=False)
     load_balancing_alpha : float = 10**-2
@@ -147,18 +151,20 @@ class TrainingArguments(transformers.TrainingArguments):
     router_temp_schedule: str = field(default="linear")
 
 class RouterCallback(TrainerCallback):
-    def __init__(self, t_start: float, t_end: float, schedule: str = "linear", save_router_stats=True, model=None):
+    def __init__(self, t_start: float, t_end: float, schedule: str = "linear", save_router_stats_clip=True, save_router_stats_dino=True, model=None, trainer=None):
         self.t_start = t_start
         self.t_end = t_end
         self.schedule = schedule
         self.last_temp = t_start
-        self.save_router_stats = save_router_stats
+        self.save_router_stats_clip = save_router_stats_clip
+        self.save_router_stats_dino = save_router_stats_dino
 
-        # (optional) buffers for heatmaps
-        self._did_define_metrics = False
-        self._router_prob_rows = []
-        self._router_usage_rows = []
+        # # (optional) buffers for heatmaps
+        # self._did_define_metrics = False
+        # self._router_prob_rows = []
+        # self._router_usage_rows = []
         self.model_ref = model
+        self.trainer_ref = trainer
 
     def _compute_temp(self, step: int, max_steps: int) -> float:
         progress = min(step / max_steps, 1.0)
@@ -179,27 +185,35 @@ class RouterCallback(TrainerCallback):
             model = self.model_ref
         if model is None:
             print(" CAN NOT FIND MODEL FOR LOADING")
-            return 
+            return
+        # import pdb; pdb.set_trace()
         m = model.module if hasattr(model, "module") else model
-        if not hasattr(m, "router"):
+        if not hasattr(m, "router_clip") and not hasattr(m, "router_dino"):
             print("........ where did my router go?")
             return
         max_steps = max(state.max_steps, 1)
         t = self._compute_temp(state.global_step, max_steps)
         self.last_temp = t
         with torch.no_grad():
-            m.router.router_temperature = t  # temperature is actually set here
+            if hasattr(m, "router_clip"):
+                m.router_clip.router_temperature = t
+            if hasattr(m, "router_dino"):
+                m.router_dino.router_temperature = t
+
+        # will remove later
+        if hasattr(m, "router_dino") and m.router_dino._weight_fn.weights.grad is not None:
+            print(f"[router_dino weight grad norm]: {m.router_dino._weight_fn.weights.grad.norm().item():.6f}")
 
     def on_log(self, args, state, control, logs=None, **kwargs):
         custom_metrics = {}
         if logs is None:
-            print("AHHHHHHHHHHHH")
+            print("logs is None.")
             return
         if not state.is_world_process_zero:
             return
         if wandb.run is None:
             return
-        
+
         custom_metrics = {"router/callback_alive": 1}
 
         model = kwargs.get("model", None)
@@ -209,124 +223,96 @@ class RouterCallback(TrainerCallback):
             return
 
         m = model.module if hasattr(model, "module") else model
-        router = getattr(m, "router", getattr(getattr(m, "model", None), "router", None))
-        if router is None or not self.save_router_stats:
+        router_clip = getattr(m, "router_clip", getattr(getattr(m, "model", None), "router_clip", None))
+        router_dino = getattr(m, "router_dino", getattr(getattr(m, "model", None), "router_dino", None))
+
+        if (router_clip is None  or not self.save_router_stats_clip) and (router_dino is None or not self.save_router_stats_dino):
             return
 
         # pick the most recent step in your buffers (or drain them)
-        keys = sorted(router.router_probs_per_step.keys())
-        if not keys:
-            return
-        step_key = keys[-1]
+        if router_clip is not None and self.save_router_stats_clip:
+            keys = sorted(router_clip.router_probs_per_step.keys())
+            if not keys:
+                return
+            step_key = keys[-1]
 
-        probs = router.router_probs_per_step.pop(step_key)
-        masks = router.expert_mask_per_step.pop(step_key, None)
-        hybrid_debug = getattr(router, "hybrid_debug_per_step", {}).pop(step_key, None)
+            probs = router_clip.router_probs_per_step.pop(step_key)
+            masks = router_clip.expert_mask_per_step.pop(step_key, None)
+            hybrid_debug = getattr(router_clip, "hybrid_debug_per_step", {}).pop(step_key, None)
 
-        avg_probs = probs.mean(dim=0).float().detach().cpu()
-        for i, v in enumerate(avg_probs):
-            custom_metrics[f"router/prob_expert_{i}"] = float(v)
+            avg_probs = probs.mean(dim=0).float().detach().cpu()
+            for i, v in enumerate(avg_probs):
+                custom_metrics[f"router_clip/prob_expert_{i}"] = float(v)
 
-        if masks is not None:
-            usage = masks.mean(dim=0).float().detach().cpu()
-            for i, v in enumerate(usage):
-                custom_metrics[f"router/usage_expert_{i}"] = float(v)
+            if masks is not None:
+                usage = masks.mean(dim=0).float().detach().cpu()
+                for i, v in enumerate(usage):
+                    custom_metrics[f"router_clip/usage_expert_{i}"] = float(v)
 
-        if hybrid_debug is not None:
-            custom_metrics["router/disagreement_mean"] = float(
-                hybrid_debug["disagreement_mean"].item()
-            )
-            disagreement_per_layer = hybrid_debug["disagreement_per_layer_mean"].to(torch.float32)
-            for i, value in enumerate(disagreement_per_layer):
-                custom_metrics[f"router/disagreement_layer_{i}"] = float(value.item())
-
-            custom_metrics["router/beta_mean"] = float(
-                hybrid_debug["beta_mean"].item()
-            )
-            if "reserve_gamma_mean" in hybrid_debug:
-                custom_metrics["router/reserve_gamma_mean"] = float(
-                    hybrid_debug["reserve_gamma_mean"].item()
+            if hybrid_debug is not None:
+                custom_metrics["router_clip/disagreement_mean"] = float(
+                    hybrid_debug["disagreement_mean"].item()
                 )
+                disagreement_per_layer = hybrid_debug["disagreement_per_layer_mean"].to(torch.float32)
+                for i, value in enumerate(disagreement_per_layer):
+                    custom_metrics[f"router_clip/disagreement_layer_{i}"] = float(value.item())
+
+                custom_metrics["router_clip/beta_mean"] = float(
+                    hybrid_debug["beta_mean"].item()
+                )
+                if "reserve_gamma_mean" in hybrid_debug:
+                    custom_metrics["router_clip/reserve_gamma_mean"] = float(
+                        hybrid_debug["reserve_gamma_mean"].item()
+                    )
 
         custom_metrics["router_temperature"] = float(self.last_temp)
-        wandb.log(custom_metrics) 
-# class RouterCallback(TrainerCallback):
-#     def __init__(self, t_start: float, t_end: float, schedule: str = "linear", save_router_stats=True):
-#         self.t_start = t_start
-#         self.t_end = t_end
-#         self.schedule = schedule
-#         self.last_temp = t_start
-#         self.save_router_stats = save_router_stats
-#         # self.save_steps_router_stats = save_steps_router_stats
+        wandb.log(custom_metrics)
 
-#     def _compute_temp(self, step: int, max_steps: int) -> float:
-#         progress = min(step / max_steps, 1.0)
-#         if self.schedule == "linear":
-#             return self.t_start + (self.t_end - self.t_start) * progress
-#         if self.schedule == "cosine":
-#             return self.t_end + 0.5 * (self.t_start - self.t_end) * (1.0 + torch.cos(torch.tensor(progress * torch.pi)).item())
-#         if self.schedule == "exp":
-#             if self.t_start <= 0 or self.t_end <= 0:
-#                 return self.t_end
-#             return self.t_start * ((self.t_end / self.t_start) ** progress)
-#         return self.t_end
+        if router_dino is not None and self.save_router_stats_dino:
+            keys = sorted(router_dino.router_probs_per_step.keys())
+            if not keys:
+                return
+            step_key = keys[-1]
 
-#     def on_step_end(self, args, state, control, **kwargs):
-#         model = kwargs.get("model", None)
-#         if model is None:
-#             return
-#         m = model.module if hasattr(model, "module") else model
-#         if not hasattr(m, "router"):
-#             return
-#         max_steps = max(state.max_steps, 1)
-#         t = self._compute_temp(state.global_step, max_steps)
-#         self.last_temp = t
-#         with torch.no_grad():
-#             m.router.router_temperature = t  # NOTE: this is where the temperature is actually set
+            probs = router_dino.router_probs_per_step.pop(step_key)
+            masks = router_dino.expert_mask_per_step.pop(step_key, None)
+            hybrid_debug = getattr(router_dino, "hybrid_debug_per_step", {}).pop(step_key, None)
 
-#     def on_log(self, args, state, control, model=None, logs=None, **kwargs):
-#         if not state.is_world_process_zero or model is None:
-#             return
-            
-#         model_ref = model.module if hasattr(model, "module") else model
-#         # print("model_ref : ", model_ref)
-#         router = getattr(model_ref, "router", getattr(getattr(model_ref, "model", None), "router", None))
-#         # print("router : ", router)
-        
-#         if router is not None and self.save_router_stats:
-#             # Sort keys to ensure we log in chronological order
-#             keys = sorted(list(router.router_probs_per_step.keys()))
-            
-#             for step_key in keys:
-#                 # Use .pop() to 'drain' the dict and save memory
-#                 probs = router.router_probs_per_step.pop(step_key)
-#                 masks = router.expert_mask_per_step.pop(step_key, None)
-                
-#                 # Compute means (Move to CPU/Float immediately)
-#                 avg_probs = probs.mean(dim=0).float()
-#                 usage = masks.mean(dim=0).float()
+            avg_probs = probs.mean(dim=0).float().detach().cpu()
+            for i, v in enumerate(avg_probs):
+                custom_metrics[f"router_dino/prob_expert_{i}"] = float(v)
 
-#                 # Build a single payload for this specific step
-#                 payload = {}
-#                 for i, val in enumerate(avg_probs):
-#                     payload[f"router/prob_expert_{i}"] = val.item()
-                
-#                 for i, val in enumerate(usage):
-#                     payload[f"router/usage_expert_{i}"] = val.item()
+            if masks is not None:
+                usage = masks.mean(dim=0).float().detach().cpu()
+                for i, v in enumerate(usage):
+                    custom_metrics[f"router_dino/usage_expert_{i}"] = float(v)
 
-#                 wandb.log(payload, step=step_key)
-#             if logs is None:
-#                 return
-#             if logs is not None and len(keys) > 0:
-#                 # We only put single floats/ints in 'logs', never tensors or dicts
-#                 logs["router_temperature"] = self.last_temp
-#                 # Log the average of the most recent expert usage as a summary
-#                 if usage is not None:
-#                     logs["router_usage_std"] = usage.std().item()
+            if hybrid_debug is not None:
+                custom_metrics["router_dino/disagreement_mean"] = float(
+                    hybrid_debug["disagreement_mean"].item()
+                )
+                disagreement_per_layer = hybrid_debug["disagreement_per_layer_mean"].to(torch.float32)
+                for i, value in enumerate(disagreement_per_layer):
+                    custom_metrics[f"router_dino/disagreement_layer_{i}"] = float(value.item())
 
-#             # Final safety clear
-#             router.router_probs_per_step.clear()
-#             router.expert_mask_per_step.clear()
+                custom_metrics["router_dino/beta_mean"] = float(
+                    hybrid_debug["beta_mean"].item()
+                )
+                if "reserve_gamma_mean" in hybrid_debug:
+                    custom_metrics["router_dino/reserve_gamma_mean"] = float(
+                        hybrid_debug["reserve_gamma_mean"].item()
+                    )
+
+        custom_metrics["router_temperature"] = float(self.last_temp)
+        # import pdb; pdb.set_trace()
+        if self.trainer_ref is not None and hasattr(self.trainer_ref, "last_aux_loss"):
+            m = self.trainer_ref.model.module if hasattr(self.trainer_ref.model, "module") else self.trainer_ref.model
+            alpha = getattr(m, "load_balance_alpha", None)
+            custom_metrics["router/aux_loss_raw"] = self.trainer_ref.last_aux_loss
+            if alpha is not None:
+                custom_metrics["router/aux_loss_weighted"] = self.trainer_ref.last_aux_loss * float(alpha)
+
+        wandb.log(custom_metrics)
 
 def maybe_zero_3(param, ignore_status=False, name=None):
     from deepspeed import zero
@@ -376,16 +362,23 @@ def get_peft_state_non_lora_maybe_zero_3(named_params, require_grad_only=True):
     return to_return
 
 
+# def get_mm_adapter_state_maybe_zero_3(named_params, keys_to_match):
+#     import pdb; pdb.set_trace()
+#     to_return = {k: t for k, t in named_params if any(key_match in k for key_match in keys_to_match)}
+#     to_return = {k: maybe_zero_3(v, ignore_status=True).cpu() for k, v in to_return.items()}
+#     return to_return
+
 def get_mm_adapter_state_maybe_zero_3(named_params, keys_to_match):
-    to_return = {k: t for k, t in named_params if any(key_match in k for key_match in keys_to_match)}
-    to_return = {k: maybe_zero_3(v, ignore_status=True).cpu() for k, v in to_return.items()}
+    # import pdb; pdb.set_trace()
+    to_return = {k: t for k, t in named_params if any(k == key or k.startswith(key + ".") or k == f"model.{key}" or k.startswith(f"model.{key}.") for key in keys_to_match)}
+    to_return = {k: maybe_zero_3(v, ignore_status=True, name=k).cpu() for k, v in to_return.items()}
     return to_return
 
 
 def find_all_linear_names(model):
     cls = torch.nn.Linear
     lora_module_names = set()
-    multimodal_keywords = ['mm_projector', 'vision_tower', 'vision_resampler', 'router']
+    multimodal_keywords = ['mm_projector', 'dino_mm_projector', 'vision_tower', 'vision_resampler', 'router']
     for name, module in model.named_modules():
         if any(mm_keyword in name for mm_keyword in multimodal_keywords):
             continue
@@ -405,27 +398,49 @@ def safe_save_model_for_hf_trainer(trainer: transformers.Trainer,
     if getattr(trainer.args, "tune_mm_mlp_adapter", False):
         # print("=============== I AM IN KEYS TO MATCH ===============")
         # Only save Adapter and scaling coefs
-        keys_to_match = ['mm_projector', 'router']
-        if getattr(trainer.args, "tune_residual_scaling_coef", False):
-            keys_to_match.extend(['scaling_coef'])
-        if getattr(trainer.args, "use_im_start_end", False):
-            keys_to_match.extend(['embed_tokens', 'embed_in'])
-        # save also residuals if being trained
-        #if getattr(trainer.args, "tune_residual_scaling_coef", False):
-        # keys_to_match.extend(['scaling_coef'])
+        # import pdb; pdb.set_trace()
+        if hasattr(trainer.model, 'mm_projector') or hasattr(trainer.model.model, 'mm_projector'):
+            keys_to_match = ['mm_projector', 'router_clip', 'clip_dino_fusion'] #'clip_attn_q', "dino_attn_k", "dino_attn_v"]
+            if getattr(trainer.args, "tune_residual_scaling_coef", False):
+                keys_to_match.extend(['scaling_coef'])
+            if getattr(trainer.args, "use_im_start_end", False):
+                keys_to_match.extend(['embed_tokens', 'embed_in'])
+            # save also residuals if being trained
+            #if getattr(trainer.args, "tune_residual_scaling_coef", False):
+            # keys_to_match.extend(['scaling_coef'])
+            weight_to_save = get_mm_adapter_state_maybe_zero_3(trainer.model.named_parameters(), keys_to_match)
+            trainer.model.config.save_pretrained(output_dir)
 
-        weight_to_save = get_mm_adapter_state_maybe_zero_3(trainer.model.named_parameters(), keys_to_match)
-        trainer.model.config.save_pretrained(output_dir)
+            current_folder = output_dir.split('/')[-1]
+            parent_folder = os.path.dirname(output_dir)
+            if trainer.args.local_rank == 0 or trainer.args.local_rank == -1:
+                if current_folder.startswith('checkpoint-'):
+                    mm_projector_folder = os.path.join(parent_folder, "mm_projector")
+                    os.makedirs(mm_projector_folder, exist_ok=True)
+                    torch.save(weight_to_save, os.path.join(mm_projector_folder, f'{current_folder}.bin'))
+                else:
+                    torch.save(weight_to_save, os.path.join(output_dir, f'mm_projector.bin'))
 
-        current_folder = output_dir.split('/')[-1]
-        parent_folder = os.path.dirname(output_dir)
-        if trainer.args.local_rank == 0 or trainer.args.local_rank == -1:
-            if current_folder.startswith('checkpoint-'):
-                mm_projector_folder = os.path.join(parent_folder, "mm_projector")
-                os.makedirs(mm_projector_folder, exist_ok=True)
-                torch.save(weight_to_save, os.path.join(mm_projector_folder, f'{current_folder}.bin'))
-            else:
-                torch.save(weight_to_save, os.path.join(output_dir, f'mm_projector.bin'))
+        if hasattr(trainer.model, 'dino_mm_projector') or hasattr(trainer.model.model, 'dino_mm_projector'):
+            keys_to_match = ['dino_mm_projector', 'router_dino']
+            if getattr(trainer.args, "use_im_start_end", False):
+                keys_to_match.extend(['embed_tokens', 'embed_in'])
+            if getattr(trainer.args, "tune_residual_scaling_coef", False):
+                keys_to_match.extend(['scaling_coef'])
+            # import pdb; pdb.set_trace()
+            weight_to_save = get_mm_adapter_state_maybe_zero_3(trainer.model.named_parameters(), keys_to_match)
+            trainer.model.config.save_pretrained(output_dir)
+
+            current_folder = output_dir.split('/')[-1]
+            parent_folder = os.path.dirname(output_dir)
+            if trainer.args.local_rank == 0 or trainer.args.local_rank == -1:
+                if current_folder.startswith('checkpoint-'):
+                    mm_projector_folder = os.path.join(parent_folder, "dino_mm_projector")
+                    os.makedirs(mm_projector_folder, exist_ok=True)
+                    torch.save(weight_to_save, os.path.join(mm_projector_folder, f'{current_folder}.bin'))
+                else:
+                    torch.save(weight_to_save, os.path.join(output_dir, f'dino_mm_projector.bin'))
+
         return
 
     if trainer.deepspeed:
@@ -897,12 +912,43 @@ def get_base_model(model_path, model_base, load_in_4bit, load_in_8bit, device_ma
     )
     return tokenizer, model, image_processor, context_len
 
+class ClipDinoDualProcessor(Dataset):
+    """
+    Takes data of type LazySupervisedDataset for both clip and
+    dino and makes a single dataset containing both examples.
+    Follows LazySupervisedDataset implementation
+    """
+    def __init__(self, train_dataset_clip, train_dataset_dino):
+        super(ClipDinoDualProcessor, self).__init__()
+
+        rank0_print("\n Creating combined Clip and Dino dataset for trainer")
+        self.train_dataset_clip = train_dataset_clip
+        self.train_dataset_dino = train_dataset_dino
+
+    def __len__(self):
+        return len(self.train_dataset_clip) # number of examples should just be
+                                            # one since you are passing the data points as pairs
+    @property
+    def modality_lengths(self):
+        return self.train_dataset_clip.modality_lengths
+
+
+    def __getitem__(self, i) -> Dict[str, torch.Tensor]:
+        item = self.train_dataset_clip[i]
+        # assert item['input_ids'] == self.train_dataset_dino[i]['input_ids']
+        # assert item['labels'] == self.train_dataset_dino[i]['labels']
+        # assert item['clip_texts'] == self.train_dataset_dino[i]['clip_texts']
+        # if all these pass, add dino image as extra field to the item
+        item['image_dino'] = self.train_dataset_dino[i]['image']
+        return item
+
 class LazySupervisedDataset(Dataset):
     """Dataset for supervised fine-tuning."""
 
     def __init__(self, data_path: str,
                  tokenizer: transformers.PreTrainedTokenizer,
-                 data_args: DataArguments):
+                 data_args: DataArguments,
+                 for_model="clip"):
         super(LazySupervisedDataset, self).__init__()
         list_data_dict = json.load(open(data_path, "r"))
 
@@ -910,6 +956,7 @@ class LazySupervisedDataset(Dataset):
         self.tokenizer = tokenizer
         self.list_data_dict = list_data_dict
         self.data_args = data_args
+        self.for_model = for_model
 
     def __len__(self):
         return len(self.list_data_dict)
@@ -936,10 +983,16 @@ class LazySupervisedDataset(Dataset):
         if isinstance(i, int):
             sources = [sources]
         assert len(sources) == 1, "Don't know why it is wrapped to a list"  # FIXME
+
         if 'image' in sources[0]:
             image_file = self.list_data_dict[i]['image']
             image_folder = self.data_args.image_folder
-            processor = self.data_args.image_processor
+            # print("self.for_model : ", self.for_model)
+            if self.for_model == "clip" or self.for_model == "siglip":
+                processor = self.data_args.image_processor_clip # need to know when to process for dino and when to process for clip
+            else:
+                processor = self.data_args.image_processor_dino
+            # print(f"\n processor type is {type(processor)}")
             image = Image.open(os.path.join(image_folder, image_file)).convert('RGB')
             if self.data_args.image_aspect_ratio == 'pad':
                 def expand2square(pil_img, background_color):
@@ -957,12 +1010,14 @@ class LazySupervisedDataset(Dataset):
                 image = expand2square(image, tuple(int(x*255) for x in processor.image_mean))
                 image = processor.preprocess(image, return_tensors='pt')['pixel_values'][0]
             else:
+                # import pdb; pdb.set_trace()
                 image = processor.preprocess(image, return_tensors='pt')['pixel_values'][0]
             sources = preprocess_multimodal(
                 copy.deepcopy([e["conversations"] for e in sources]),
                 self.data_args)
         else:
             sources = copy.deepcopy([e["conversations"] for e in sources])
+        # print(f"\n sources : {sources}; for model: {self.for_model}")
         data_dict = preprocess(
             sources,
             self.tokenizer,
@@ -979,8 +1034,18 @@ class LazySupervisedDataset(Dataset):
             data_dict['image'] = image
         elif self.data_args.is_multimodal:
             # image does not exist in the data, but the model is multimodal
-            crop_size = self.data_args.image_processor.crop_size
-            data_dict['image'] = torch.zeros(3, crop_size['height'], crop_size['width'])
+            if self.for_model == "clip" or self.for_model == "siglip":
+                processor = self.data_args.image_processor_clip # need to know when to process for dino and when to process for clip
+                crop_size = processor.crop_size
+                data_dict['image'] = torch.zeros(3, crop_size['height'], crop_size['width'])
+            else:
+                processor = self.data_args.image_processor_dino
+                crop_size = processor.crop_size
+                data_dict['image'] = torch.zeros(3, crop_size, crop_size)
+            # print("\n calculating crop size")
+            # crop_size = processor.crop_size
+            # # print("\n END calculating crop size")
+            # data_dict['image'] = torch.zeros(3, crop_size['height'], crop_size['width'])
         return data_dict
 
 
@@ -1010,24 +1075,49 @@ class DataCollatorForSupervisedDataset(object):
 
         if 'clip_texts' in instances[0]:
             batch['clip_texts'] = [instance['clip_texts'] for instance in instances]
-
         if 'image' in instances[0]:
             images = [instance['image'] for instance in instances]
+            # not a concern if dino_images is empty here but encoder_type has dino in it because we will replace dino_images
+            # with images in comput_loss in llava_trainer
+            dino_images = [instance['image_dino'] for instance in instances if 'image_dino' in instance]
+            # print("\n dino_images : ", dino_images)
+            # import sys; sys.exit(0)
             if all(x is not None and x.shape == images[0].shape for x in images):
                 batch['images'] = torch.stack(images)
+                batch['dino_images'] = torch.stack(dino_images) if dino_images else None
             else:
                 batch['images'] = images
+                batch['dino_images'] = dino_images if dino_images else None
 
         return batch
 
 
 def make_supervised_data_module(tokenizer: transformers.PreTrainedTokenizer,
-                                data_args) -> Dict:
+                                data_args, encoder_type) -> Dict:
     """Make dataset and collator for supervised fine-tuning."""
-    train_dataset = LazySupervisedDataset(tokenizer=tokenizer,
-                                data_path=data_args.data_path,
-                                data_args=data_args)
+    # import pdb; pdb.set_trace()
+    train_dataset = None
+    if "clip" in encoder_type or "siglip" in encoder_type:
+        train_dataset = LazySupervisedDataset(tokenizer=tokenizer,
+                                    data_path=data_args.data_path,
+                                    data_args=data_args)
+    train_dataset_dino = None
+    if "dino" in encoder_type:
+        train_dataset_dino = LazySupervisedDataset(tokenizer=tokenizer,
+                                    data_path=data_args.data_path,
+                                    data_args=data_args,
+                                    for_model="dino")
+
+    if train_dataset_dino is not None and train_dataset is not None:
+        print("\n we are using combined dataset processor since we are using clip + dino instance. If this was not intended, please change the encoder_type parameter.")
+        train_dataset = ClipDinoDualProcessor(train_dataset, train_dataset_dino)
+    elif train_dataset_dino is not None:
+        train_dataset = train_dataset_dino
+
     data_collator = DataCollatorForSupervisedDataset(tokenizer=tokenizer)
+
+    # we shoul not have a train_dataset and then a seperate train_dataset_dino because that
+    # will mess up downstream since we use Trainer.
     return dict(train_dataset=train_dataset,
                 eval_dataset=None,
                 data_collator=data_collator)
@@ -1035,7 +1125,7 @@ def make_supervised_data_module(tokenizer: transformers.PreTrainedTokenizer,
 
 def train(attn_implementation=None):
     global local_rank
-    print("====================== SUCCESSFULLY IN MOL TRAINER ROUTER ======================")
+    rank0_print("====================== SUCCESSFULLY IN MOL TRAINER ROUTER ======================")
     parser = transformers.HfArgumentParser(
         (ModelArguments, DataArguments, TrainingArguments))
     model_args, data_args, training_args = parser.parse_args_into_dataclasses()
@@ -1052,7 +1142,7 @@ def train(attn_implementation=None):
             quantization_config=BitsAndBytesConfig(
                 load_in_4bit=training_args.bits == 4,
                 load_in_8bit=training_args.bits == 8,
-                llm_int8_skip_modules=["mm_projector"],
+                llm_int8_skip_modules=["mm_projector", "router_dino", "router_clip", "dino_mm_projector"],
                 llm_int8_threshold=6.0,
                 llm_int8_has_fp16_weight=False,
                 bnb_4bit_compute_dtype=compute_dtype,
@@ -1062,31 +1152,57 @@ def train(attn_implementation=None):
         ))
     # import pdb; pdb.set_trace()
     # tokenizer, model_base, image_processor_base, context_len = get_base_model(model_args.model_name_or_path, None, load_in_4bit=training_args.bits == 4, load_in_8bit=training_args.bits == 8, device_map=training_args.device)
-
     if model_args.vision_tower is not None:
         config = transformers.AutoConfig.from_pretrained(model_args.model_name_or_path, trust_remote_code=True)
+        config.mm_hidden_size_dino = 1024
+        config.fusion_type = model_args.fusion_type # this only matters if we have clip + dino instance
+
+        config.encoder_type = model_args.encoder_type
         if 'mpt' in model_args.model_name_or_path:
             config.attn_config['attn_impl'] = training_args.mpt_attn_impl
-            model = RouterLlavaMptForCausalLM.from_pretrained(
-                model_args.model_name_or_path,
-                config=config,
-                cache_dir=training_args.cache_dir,
-                **bnb_model_from_pretrained_args
-            )
+            if ("clip" in model_args.encoder_type or "siglip" in model_args.encoder_type)  and "dino" in model_args.encoder_type:
+                model = DoubleRouterLlavaMptForCausalLM.from_pretrained(
+                     model_args.model_name_or_path,
+                    config=config,
+                    cache_dir=training_args.cache_dir,
+                    **bnb_model_from_pretrained_args
+                )
+            else:
+                model = RouterLlavaMptForCausalLM.from_pretrained(
+                    model_args.model_name_or_path,
+                    config=config,
+                    cache_dir=training_args.cache_dir,
+                    **bnb_model_from_pretrained_args
+                )
+                model.encoder_type = model_args.encoder_type
         else:
             # import pdb; pdb.set_trace()
             # router is being passed in somewhere
-            model = RouterLlavaLlamaForCausalLM.from_pretrained(
-                model_args.model_name_or_path,
-                cache_dir=training_args.cache_dir,
-                attn_implementation=attn_implementation,
-                torch_dtype=(torch.bfloat16 if training_args.bf16 else None),
-                **bnb_model_from_pretrained_args
-            )
+            if ("clip" in model_args.encoder_type or "siglip" in model_args.encoder_type)  and "dino" in model_args.encoder_type:
+                model = DoubleRouterLlavaLlamaForCausalLM.from_pretrained(
+                    model_args.model_name_or_path,
+                    config=config, # need to add this in or else it gets re-initialized
+                    cache_dir=training_args.cache_dir,
+                    attn_implementation=attn_implementation,
+                    torch_dtype=(torch.bfloat16 if training_args.bf16 else None),
+                    **bnb_model_from_pretrained_args
+                )
+            else:
+                # import pdb; pdb.set_trace()
+                model = RouterLlavaLlamaForCausalLM.from_pretrained(
+                    model_args.model_name_or_path,
+                    config=config, # need ot add this in or else it gets re-initialized
+                    cache_dir=training_args.cache_dir,
+                    attn_implementation=attn_implementation,
+                    torch_dtype=(torch.bfloat16 if training_args.bf16 else None),
+                    **bnb_model_from_pretrained_args
+                )
+                model.encoder_type = model_args.encoder_type
     else:
         model = transformers.LlamaForCausalLM.from_pretrained(
             pretrained_model_name_or_pat=model_args.model_name_or_path,
             cache_dir=training_args.cache_dir,
+            config=config,
             attn_implementation=attn_implementation,
             torch_dtype=(torch.bfloat16 if training_args.bf16 else None),
             **bnb_model_from_pretrained_args
@@ -1143,7 +1259,9 @@ def train(attn_implementation=None):
             padding_side="right",
             use_fast=False,
         )
-   
+    # tokenizer is of type transformers.models.llama.tokenization_llama.LlamaTokenizer
+    # print("\n tokenizer is of type: ", type(tokenizer))
+    # import pdb; pdb.set_trace()
     if model_args.version == "v0":
         if tokenizer.pad_token is None:
             smart_tokenizer_and_embedding_resize(
@@ -1161,15 +1279,23 @@ def train(attn_implementation=None):
             conversation_lib.default_conversation = conversation_lib.conv_templates["vicuna_v1"]
 
     if model_args.vision_tower is not None:
-        # pdb.set_trace()
+        # import pdb; pdb.set_trace()
         model.get_model().initialize_vision_modules(
             model_args=model_args,
             fsdp=training_args.fsdp
         )
-        # initialize vision tower is frozen
-        vision_tower = model.get_vision_tower()
-        vision_tower.to(dtype=torch.bfloat16 if training_args.bf16 else torch.float16, device=training_args.device)
-        
+        rank0_print("\n Vision tower initialized and frozen.")
+        # initialize vision tower to frozen
+        # pdb.set_trace()
+        vision_tower = None
+        dino_tower = None
+        if ("clip" in model_args.encoder_type or "siglip" in model_args.encoder_type):
+            vision_tower = model.get_vision_tower()
+            vision_tower.to(dtype=torch.bfloat16 if training_args.bf16 else torch.float16, device=training_args.device)
+        if "dino" in model_args.encoder_type:
+            dino_tower = model.get_dino_vision_tower() # create seperate dino_tower when we have clip + dino instance
+            dino_tower.to(dtype=torch.bfloat16 if training_args.bf16 else torch.float16, device=training_args.device)
+
         model.config.force_reserve_layer = model_args.force_reserve_layer
         model.config.reserve_layer = model_args.reserve_layer
         model.config.save_router_stats = model_args.save_router_stats
@@ -1218,6 +1344,7 @@ def train(attn_implementation=None):
             )
         if model_args.use_text_conditioned_router and model_args.use_text_only_gating:
             raise ValueError("use_text_conditioned_router and use_text_only_gating are mutually exclusive.")
+        # import pdb; pdb.set_trace()
         if (model_args.use_text_conditioned_router or model_args.use_text_only_gating) and getattr(model.config, "mm_text_hidden_size", None) is None:
             text_hidden_size = getattr(model.config, "hidden_size", None)
             if text_hidden_size is None:
@@ -1227,122 +1354,266 @@ def train(attn_implementation=None):
             if text_hidden_size is None:
                 raise ValueError("Unable to infer text hidden size for TextConditionedRouter.")
             model.config.mm_text_hidden_size = text_hidden_size
-        
-        image_size = vision_tower.vision_tower.config.image_size
-        patch_size = vision_tower.vision_tower.config.patch_size
-        hidden_size = vision_tower.vision_tower.config.hidden_size
-        num_image_tokens = (image_size // patch_size)**2 + 1
-        router_weights = torch.zeros((num_image_tokens, hidden_size)).to(dtype=torch.bfloat16 if training_args.bf16 else torch.float16, device=training_args.device)
-        # print("model.config.mm_vision_select_feature: ", model.config.mm_vision_select_feature) # patch
 
+        if "dino" in model_args.encoder_type:
+            model.config.dino_mm_text_hidden_size = 2048 # this is what is needed for dino
+
+
+        rank0_print("\n Router configs set in model.config.")
+        # import pdb; pdb.set_trace()
+        # print("model.config : ", model.config)
+        # import sys; sys.exit(0)
+        if dino_tower is not None: # initialize router_dino_weights
+            image_size = dino_tower.config.image_size
+            patch_size = dino_tower.config.patch_size
+            hidden_size = dino_tower.config.hidden_size_dino
+            num_image_tokens = (image_size // patch_size)**2 # we remove cls token
+            router_dino_weights = torch.zeros((num_image_tokens, hidden_size)).to(dtype=torch.bfloat16 if training_args.bf16 else torch.float16, device=training_args.device) # torch.Size([256, 1024])
+        if vision_tower is not None:
+            image_size = vision_tower.vision_tower.config.image_size
+            patch_size = vision_tower.vision_tower.config.patch_size
+            hidden_size = vision_tower.vision_tower.config.hidden_size
+            num_image_tokens = (image_size // patch_size)**2
+            if model_args.encoder_type == "clip":
+                num_image_tokens += 1 # 257 even for dino txt, which has 4 registers
+            router_clip_weights = torch.zeros((num_image_tokens, hidden_size)).to(dtype=torch.bfloat16 if training_args.bf16 else torch.float16, device=training_args.device) #torch.Size([577, 1024])
+        # import pdb; pdb.set_trace()
+        # router_weights = None
+        # print("model.config.mm_vision_select_feature: ", model.config.mm_vision_select_feature) # patch
+        if not hasattr(model.config, 'mm_vision_select_feature'):
+            model.config.mm_vision_select_feature = 'patch' # default or we get problems
         # router type
+        # import pdb; pdb.set_trace()
         if model_args.use_text_only_gating:
             router_cls = TextOnlyRouter
         elif model_args.use_text_conditioned_router:
             router_cls = TextConditionedRouter
         else:
             router_cls = Router
+        # import pdb; pdb.set_trace()
         if model_args.use_text_conditioned_router:
-            model.router = router_cls(
-                model.config,
-                router_weights,
-                top_k=model_args.num_layers_to_choose,
-                load_balancing_alpha=training_args.load_balancing_alpha,
-                text_pool=model_args.text_pool,
-                text_scale=model_args.text_scale,
-                text_conditioning=model_args.text_conditioning,
-                text_attention_type=model_args.text_attention_type,
-                text_attention_dim=model_args.text_attention_dim,
-                attn_level=model_args.attn_level,
-                hybrid_reserve_mode=model_args.hybrid_reserve_mode,
-                hybrid_disagreement_metric=model_args.hybrid_disagreement_metric,
-                force_reserve_layer=model_args.force_reserve_layer,
-                reserve_layer=model_args.reserve_layer,
-                learnable_gate=model_args.learnable_gate,
-                confidence_gate=model_args.confidence_gate,
-                confidence_gate_threshold=model_args.confidence_gate_threshold,
-                confidence_gate_slope=model_args.confidence_gate_slope,
-                vision_feature_select_strategy=model_args.mm_vision_select_feature,
-            )
+            if ("clip" in model_args.encoder_type or "siglip" in model_args.encoder_type):
+                # we use encoder type in text conditioning to infer the _infer_text_hidden_size dim,
+                # which is different for clip and dino.
+                config_clip = copy.deepcopy(model.config)
+                config_clip.encoder_type = "clip"
+                model.router_clip = router_cls(
+                    config_clip,
+                    router_clip_weights,
+                    config_clip.mm_vision_select_feature,
+                    training_args.load_balancing_alpha,
+                    text_pool=model_args.text_pool,
+                    text_scale=model_args.text_scale,
+                    text_conditioning=model_args.text_conditioning,
+                    text_attention_type=model_args.text_attention_type,
+                    text_attention_dim=model_args.text_attention_dim,
+                    hybrid_reserve_mode=model_args.hybrid_reserve_mode,
+                    hybrid_disagreement_metric=model_args.hybrid_disagreement_metric,
+                    attn_level=model_args.attn_level,
+                    force_reserve_layer=model_args.force_reserve_layer,
+                    reserve_layer=model_args.reserve_layer,
+                    learnable_gate=model_args.learnable_gate,
+                    confidence_gate=model_args.confidence_gate,
+                    confidence_gate_threshold=model_args.confidence_gate_threshold,
+                    confidence_gate_slope=model_args.confidence_gate_slope,
+                )
+            if "dino" in model_args.encoder_type:
+                config_dino = copy.deepcopy(model.config)
+                config_dino.encoder_type = "dino"
+                model.router_dino = router_cls(
+                    config_dino,
+                    router_dino_weights,
+                    config_dino.mm_vision_select_feature,
+                    training_args.load_balancing_alpha,
+                    text_pool=model_args.text_pool,
+                    text_scale=model_args.text_scale,
+                    text_conditioning=model_args.text_conditioning,
+                    text_attention_type=model_args.text_attention_type,
+                    hybrid_reserve_mode=model_args.hybrid_reserve_mode,
+                    hybrid_disagreement_metric=model_args.hybrid_disagreement_metric,
+                    text_attention_dim=model_args.text_attention_dim,
+                    attn_level=model_args.attn_level,
+                    force_reserve_layer=model_args.force_reserve_layer,
+                    reserve_layer=model_args.reserve_layer,
+                    learnable_gate=model_args.learnable_gate,
+                    confidence_gate=model_args.confidence_gate,
+                    confidence_gate_threshold=model_args.confidence_gate_threshold,
+                    confidence_gate_slope=model_args.confidence_gate_slope,
+                )
         elif model_args.use_text_only_gating:
-            model.router = router_cls(
-                model.config,
-                router_weights,
-                top_k=model_args.num_layers_to_choose,
-                load_balancing_alpha=training_args.load_balancing_alpha,
-                text_pool=model_args.text_pool,
-                text_scale=model_args.text_scale,
-                force_reserve_layer=model_args.force_reserve_layer,
-                reserve_layer=model_args.reserve_layer,
-                learnable_gate=model_args.learnable_gate,
-                confidence_gate=model_args.confidence_gate,
-                confidence_gate_threshold=model_args.confidence_gate_threshold,
-                confidence_gate_slope=model_args.confidence_gate_slope,
-                vision_feature_select_strategy=model_args.mm_vision_select_feature,
-            )
+            if ("clip" in model_args.encoder_type or "siglip" in model_args.encoder_type):
+                model.router_clip = router_cls(
+                    model.config,
+                    router_clip_weights,
+                    model.config.mm_vision_select_feature,
+                    training_args.load_balancing_alpha,
+                    text_pool=model_args.text_pool,
+                    text_scale=model_args.text_scale,
+                    force_reserve_layer=model_args.force_reserve_layer,
+                    reserve_layer=model_args.reserve_layer,
+                    learnable_gate=model_args.learnable_gate,
+                    confidence_gate=model_args.confidence_gate,
+                    confidence_gate_threshold=model_args.confidence_gate_threshold,
+                    confidence_gate_slope=model_args.confidence_gate_slope,
+                )
+            if "dino" in model_args.encoder_type:
+                model.router_dino = router_cls(
+                    model.config,
+                    router_dino_weights,
+                    model.config.mm_vision_select_feature,
+                    training_args.load_balancing_alpha,
+                    text_pool=model_args.text_pool,
+                    text_scale=model_args.text_scale,
+                    force_reserve_layer=model_args.force_reserve_layer,
+                    reserve_layer=model_args.reserve_layer,
+                    learnable_gate=model_args.learnable_gate,
+                    confidence_gate=model_args.confidence_gate,
+                    confidence_gate_threshold=model_args.confidence_gate_threshold,
+                    confidence_gate_slope=model_args.confidence_gate_slope,
+                )
         else:
-            model.router = router_cls(
-                model.config,
-                router_weights,
-                top_k=model_args.num_layers_to_choose,
-                load_balancing_alpha=training_args.load_balancing_alpha,
-                learnable_gate=model_args.learnable_gate,
-                confidence_gate=model_args.confidence_gate,
-                confidence_gate_threshold=model_args.confidence_gate_threshold,
-                confidence_gate_slope=model_args.confidence_gate_slope,
-                vision_feature_select_strategy=model_args.mm_vision_select_feature,
-            )
-        # chooses which layers to apply the router 
-        model.router.num_layers_to_choose = model_args.num_layers_to_choose
-        model.router.vision_feature_select_strategy = model_args.mm_vision_select_feature
-        model.router.force_reserve_layer = model_args.force_reserve_layer
-        model.router.reserve_layer =  model_args.reserve_layer
-        # for logging purposes, not to be used during inference
-        model.router.save_steps_router_stats = model_args.save_steps_router_stats
-        model.router.save_router_stats = model_args.save_router_stats
-        # make softmax less peaky
-        model.router.cap_softmax = model_args.cap_softmax
-        model.router.cap_softmax_value = model_args.cap_softmax_value
-        model.router.learnable_gate = model_args.learnable_gate
-        model.router.confidence_gate = model_args.confidence_gate
-        model.router.confidence_gate_threshold = model_args.confidence_gate_threshold
-        model.router.confidence_gate_slope = model_args.confidence_gate_slope
-        if model.router.learnable_gate and model.router.reserve_gate is None:
-            model.router.reserve_gate = torch.nn.Linear(hidden_size, 1).to(device=training_args.device)
-        model.router.requires_grad_(True) # we need to learn the router
+            if ("clip" in model_args.encoder_type or "siglip" in model_args.encoder_type):
+                model.router_clip = router_cls(
+                    model.config,
+                    router_clip_weights,
+                    model.config.mm_vision_select_feature,
+                    training_args.load_balancing_alpha,
+                    learnable_gate=model_args.learnable_gate,
+                    confidence_gate=model_args.confidence_gate,
+                    confidence_gate_threshold=model_args.confidence_gate_threshold,
+                    confidence_gate_slope=model_args.confidence_gate_slope,
+                )
+            if "dino" in model_args.encoder_type:
+                model.router_dino = router_cls(
+                    model.config,
+                    router_dino_weights,
+                    model.config.mm_vision_select_feature,
+                    training_args.load_balancing_alpha,
+                    learnable_gate=model_args.learnable_gate,
+                    confidence_gate=model_args.confidence_gate,
+                    confidence_gate_threshold=model_args.confidence_gate_threshold,
+                    confidence_gate_slope=model_args.confidence_gate_slope,
+                )
+        # chooses which layers to apply the router
+        if ("clip" in model_args.encoder_type or "siglip" in model_args.encoder_type):
+            model.router_clip.num_layers_to_choose = model_args.num_layers_to_choose
+            model.router_clip.force_reserve_layer = model_args.force_reserve_layer
+            model.router_clip.reserve_layer =  model_args.reserve_layer
+            # for logging purposes, not to be used during inference
+            model.router_clip.save_steps_router_stats = model_args.save_steps_router_stats
+            model.router_clip.save_router_stats = model_args.save_router_stats
+            # make softmax less peaky
+            model.router_clip.cap_softmax = model_args.cap_softmax
+            model.router_clip.cap_softmax_value = model_args.cap_softmax_value
+            model.router_clip.learnable_gate = model_args.learnable_gate
+            model.router_clip.confidence_gate = model_args.confidence_gate
+            model.router_clip.confidence_gate_threshold = model_args.confidence_gate_threshold
+            model.router_clip.confidence_gate_slope = model_args.confidence_gate_slope
+            if model.router_clip.learnable_gate and model.router_clip.reserve_gate is None:
+                model.router_clip.reserve_gate = torch.nn.Linear(hidden_size, 1).to(device=training_args.device)
+            model.router_clip.requires_grad_(True) # we need to learn the router
+        # import pdb; pdb.set_trace()
+        if "dino" in model_args.encoder_type:
+            model.router_dino.num_layers_to_choose = model_args.num_layers_to_choose
+            model.router_dino.force_reserve_layer = model_args.force_reserve_layer
+            model.router_dino.reserve_layer =  model_args.reserve_layer
+            # for logging purposes, not to be used during inference
+            model.router_dino.save_steps_router_stats = model_args.save_steps_router_stats
+            model.router_dino.save_router_stats = model_args.save_router_stats
+            # make softmax less peaky
+            model.router_dino.cap_softmax = model_args.cap_softmax
+            model.router_dino.cap_softmax_value = model_args.cap_softmax_value
+            model.router_dino.learnable_gate = model_args.learnable_gate
+            model.router_dino.confidence_gate = model_args.confidence_gate
+            model.router_dino.confidence_gate_threshold = model_args.confidence_gate_threshold
+            model.router_dino.confidence_gate_slope = model_args.confidence_gate_slope
+            if model.router_dino.learnable_gate and model.router_dino.reserve_gate is None:
+                model.router_dino.reserve_gate = torch.nn.Linear(hidden_size, 1).to(device=training_args.device)
+            model.router_dino.requires_grad_(True)
+
         if model_args.use_text_only_gating:
-            num_layers = getattr(vision_tower.vision_tower.config, "num_hidden_layers", None)
-            if num_layers is None and hasattr(vision_tower.vision_tower, "vision_model"):
-                num_layers = len(vision_tower.vision_tower.vision_model.encoder.layers)
-            if num_layers is None:
+            num_layers_clip = None
+            num_layers_dino = None
+
+            num_layers_clip = getattr(vision_tower.vision_tower.config, "num_hidden_layers", None)
+            num_layers_dino = getattr(dino_tower.config, "num_hidden_layers", None)
+
+            if num_layers_clip is None and hasattr(vision_tower.vision_tower, "vision_model"):
+                num_layers_clip = len(vision_tower.vision_tower.vision_model.encoder.layers)
+            if num_layers_dino is None and hasattr(dino_tower, "vision_tower"):
+                num_layers_dino = len(dino_tower.vision_tower.backbone.model.blocks)
+
+            if num_layers_clip is None and num_layers_dino is None:
                 raise ValueError("Unable to infer vision layer count for TextOnlyRouter.")
-            model.router._maybe_init_text_router(
-                num_layers,
-                device=training_args.device,
-                dtype=router_weights.dtype,
-            )
+
+            if ("clip" in model_args.encoder_type or "siglip" in model_args.encoder_type):
+                model.router_clip._maybe_init_text_router(
+                    num_layers_clip,
+                    device=training_args.device,
+                    dtype=router_clip_weights.dtype,
+                )
+            if "dino" in model_args.encoder_type:
+                model.router_dino._maybe_init_text_router(
+                    num_layers_dino,
+                    device=training_args.device,
+                    dtype=router_dino_weights.dtype,
+                )
 
         # replace zero weights with learned router weights
+        # import pdb; pdb.set_trace()
         if model_args.pretrain_mm_mlp_adapter is not None:
             weights = torch.load(model_args.pretrain_mm_mlp_adapter, map_location='cpu')
             def get_w(weights, keyword):
-                return {k.split(keyword + '.')[1]: v for k, v in weights.items() if keyword in k}
-            model.router.load_state_dict(get_w(weights, 'router'))
-            print("router weights: ", model.router.weights)
+                # remap old 'weights' key -> '_weight_fn.weights' after the router refactor
+                def remap(k): return '_weight_fn.' + k if k == 'weights' else k
+                return {remap(k.split(keyword + '.')[1]): v for k, v in weights.items() if keyword in k}
+            model.router_clip.load_state_dict(get_w(weights, 'router_clip'))
+            rank0_print(" \n loaded router_clip weights...")
 
-        print("use_text_enc: ", model_args.mm_use_text_enc)
-        # # populate with weights and biases from the checkpoint
-        # missing, unexpected = model.load_state_dict(model_base.state_dict(), strict=False)
-        # # print(missing)
-        # # import sys; sys.exit(0)
-        # # import pdb; pdb.set_trace()
-        # # print("missing: ", missing)
-        # # print("unexpected: ", unexpected)
-        # assert len(unexpected) == 0 and len(missing) == 1 # missing should just have 'router.weights'
-        
-        data_args.image_processor = vision_tower.image_processor
-        assert data_args.image_processor is not None
+            # import pdb; pdb.set_trace()
+            attn_mode =  getattr(model.get_model(), "clip_dino_fusion", None)
+            if model_args.fusion_type == "attn" and ("clip" in model_args.encoder_type or "siglip" in model_args.encoder_type) and "dino" in model_args.encoder_type:
+                assert attn_mode is not None, "we are using attn to merge clip and dino features but clip_dino_fusion is not Initailized"
+            if attn_mode is not None:
+                for attn_name in ("clip_attn_q", "dino_attn_k", "dino_attn_v", "clip_features_norm", "dino_features_norm"):
+                    attn_mode_layer = getattr(attn_mode, attn_name)
+                    attn_w = {k.split(f"model.clip_dino_fusion.{attn_name}.")[1]: v for k, v in weights.items() if f"model.clip_dino_fusion.{attn_name}." in k}
+                    try:
+                        attn_mode_layer.load_state_dict(attn_w)
+                    except:
+                        from deepspeed import zero
+                        with zero.GatheredParameters(list(attn_mode_layer.parameters()), modifier_rank=0):
+                            for pname, param in attn_mode_layer.named_parameters():
+                                if pname in attn_w:
+                                    param.data.copy_(attn_w[pname])
+                                    rank0_print(f"Loaded pretrained weights for {attn_name}")
+
+        # import pdb; pdb.set_trace()
+        if model_args.pretrain_dino_mm_mlp_adapter is not None:
+            weights = torch.load(model_args.pretrain_dino_mm_mlp_adapter, map_location='cpu')
+            def get_w(weights, keyword):
+                # remap old 'weights' key -> '_weight_fn.weights' after the router refactor
+                def remap(k): return '_weight_fn.' + k if k == 'weights' else k
+                return {remap(k.split(keyword + '.')[1]): v for k, v in weights.items() if keyword in k}
+            model.router_dino.load_state_dict(get_w(weights, 'router_dino'))
+            rank0_print(f"\n Successfully updated {get_w(weights, 'router_dino').keys()}")
+            # print("router_dino weights: ", model.router_dino.weights)
+            # import sys; sys.exit(0)
+        rank0_print("use_text_enc: ", model_args.mm_use_text_enc)
+
+        data_args.image_processor_clip = None
+        data_args.image_processor_dino = None
+        if vision_tower is not None:
+            data_args.image_processor_clip = vision_tower.image_processor
+        if dino_tower is not None:
+            data_args.image_processor_dino = dino_tower.image_processor
+
+        if ("clip" in model_args.encoder_type or "siglip" in model_args.encoder_type):
+            assert data_args.image_processor_clip is not None
+        if "dino" in model_args.encoder_type:
+            assert data_args.image_processor_dino is not None
         data_args.is_multimodal = True
+
 
         model.config.image_aspect_ratio = data_args.image_aspect_ratio
         model.config.tokenizer_padding_side = tokenizer.padding_side
@@ -1350,41 +1621,96 @@ def train(attn_implementation=None):
 
         model.config.tune_mm_mlp_adapter = training_args.tune_mm_mlp_adapter = model_args.tune_mm_mlp_adapter
         model.config.tune_residual_scaling_coef = training_args.tune_residual_scaling_coef = model_args.tune_residual_scaling_coef
-        
+
         # make the layers require gradients except the scaling coefs
         if model_args.tune_encoder_layers:
-            layers = vision_tower.vision_tower.vision_model.encoder.layers
-            for n,p in layers.named_parameters():
-                if 'scaling_coef' not in n:
-                    p.requires_grad_(True)
+            if vision_tower is not None:
+                layers = vision_tower.vision_tower.vision_model.encoder.layers
+                for n,p in layers.named_parameters():
+                    if 'scaling_coef' not in n:
+                        p.requires_grad_(True)
+            if dino_tower is not None:
+                layers = dino_tower.vision_tower.backbone.model.blocks
+                for n,p in layers.named_parameters():
+                    if 'scaling_coef' not in n:
+                        p.requires_grad_(True)
+
+        attn_mode =  getattr(model.get_model(), "clip_dino_fusion", None)
+        if model_args.fusion_type == "attn" and ("clip" in model_args.encoder_type or "siglip" in model_args.encoder_type) and "dino" in model_args.encoder_type:
+            assert attn_mode is not None, "we are using attn to merge clip and dino features but clip_dino_fusion is not Initailized"
+        # import pdb; pdb.set_trace()
+        if attn_mode is not None:
+            for attn_name in ("clip_attn_q", "dino_attn_k", "dino_attn_v", "clip_features_norm", "dino_features_norm"):
+                attn_mod = getattr(attn_mode, attn_name, None)
+                if attn_mod is None and hasattr(model, "get_model"):
+                    attn_mod = getattr(model.get_model(), attn_name, None)
+                if attn_mod is not None:
+                    for p in attn_mod.parameters():
+                        p.requires_grad = True
+
         if model_args.tune_mm_mlp_adapter:
+            # import pdb; pdb.set_trace()
             for n,p in model.named_parameters():
                 if 'router' not in n:
                     p.requires_grad_(False)
+            # for routers to not have gradients false
+            if hasattr(model, "router_dino"):
+                model.router_dino.requires_grad_(True)
+            if hasattr(model, "router_clip"):
+                model.router_clip.requires_grad_(True)
             # model.requires_grad_(False)
-            for p in model.get_model().mm_projector.parameters():
-                p.requires_grad = True
-        if model_args.tune_residual_scaling_coef:
-            for n, p in vision_tower.named_parameters():
-                if "scaling_coef" in n:
+            if hasattr(model.get_model(), "mm_projector"):
+                for p in model.get_model().mm_projector.parameters():
                     p.requires_grad = True
+
+            if hasattr(model.get_model(), "dino_mm_projector"):
+                for p in model.get_model().dino_mm_projector.parameters():
+                        p.requires_grad = True
+            # import pdb; pdb.set_trace()
+            if hasattr(model.get_model(), "clip_dino_fusion"):
+                for p in model.get_model().clip_dino_fusion.parameters():
+                    p.requires_grad = True
+
+        if model_args.tune_residual_scaling_coef:
+            if vision_tower is not None:
+                for n, p in vision_tower.named_parameters():
+                    if "scaling_coef" in n:
+                        p.requires_grad = True
+            if dino_tower is not None:
+                for n, p in dino_tower.named_parameters():
+                    if "scaling_coef" in n:
+                        p.requires_grad = True
 
         model.config.freeze_mm_mlp_adapter = training_args.freeze_mm_mlp_adapter
         model.config.freeze_residual_scaling_coef = training_args.freeze_residual_scaling_coef
         # import pdb; pdb.set_trace()
         if training_args.freeze_mm_mlp_adapter:
-            for p in model.get_model().mm_projector.parameters():
-                p.requires_grad = False
-        if training_args.freeze_residual_scaling_coef:
-            for n, p in vision_tower.named_parameters():
-                if "scaling_coef" in n:
+            if hasattr(model.get_model(), "mm_projector"):
+                for p in model.get_model().mm_projector.parameters():
                     p.requires_grad = False
-        
+            if hasattr(model.get_model(), "dino_mm_projector"):
+                for p in model.get_model().dino_mm_projector.parameters():
+                    p.requires_grad = False
+
+        if training_args.freeze_residual_scaling_coef:
+            if vision_tower is not None:
+                for n, p in vision_tower.named_parameters():
+                    if "scaling_coef" in n:
+                        p.requires_grad = False
+            if dino_tower is not None:
+                for n, p in dino_tower.named_parameters():
+                    if "scaling_coef" in n:
+                        p.requires_grad = False
+
         if training_args.bits in [4, 8]:
-            model.get_model().mm_projector.to(dtype=compute_dtype, device=training_args.device)
+            if hasattr(model.get_model(), "mm_projector"):
+                model.get_model().mm_projector.to(dtype=compute_dtype, device=training_args.device)
+            if hasattr(model.get_model(), "dino_mm_projector"):
+                model.get_model().dino_mm_projector.to(dtype=compute_dtype, device=training_args.device)
 
         model.config.mm_use_im_start_end = data_args.mm_use_im_start_end = model_args.mm_use_im_start_end
         model.config.mm_projector_lr = training_args.mm_projector_lr
+        model.config.dino_mm_projector_lr = training_args.dino_mm_projector_lr
         model.config.router_lr = training_args.router_lr
         training_args.use_im_start_end = model_args.mm_use_im_start_end
         model.config.mm_use_im_patch_token = model_args.mm_use_im_patch_token
@@ -1392,12 +1718,21 @@ def train(attn_implementation=None):
 
         if (model_args.tune_residual_scaling_coef or model_args.tune_encoder_layers) and training_args.gradient_checkpointing: # this was needed because the vision model did not have inputs require True, resulting in no gradients being passed through the model
             # pdb.set_trace()
-            if hasattr(vision_tower, "enable_input_require_grads"):
-                vision_tower.enable_input_require_grads()
-            else:
-                def make_inputs_require_grad(module, input, output):
-                    output.requires_grad_(True)
-                vision_tower.vision_tower.vision_model.embeddings.register_forward_hook(make_inputs_require_grad)
+            if vision_tower is not None:
+                if hasattr(vision_tower, "enable_input_require_grads"):
+                    vision_tower.enable_input_require_grads()
+                else:
+                    def make_inputs_require_grad(module, input, output):
+                        output.requires_grad_(True)
+                    vision_tower.vision_tower.vision_model.embeddings.register_forward_hook(make_inputs_require_grad)
+
+            if dino_tower is not None:
+                if hasattr(dino_tower, "enable_input_require_grads"):
+                    dino_tower.enable_input_require_grads()
+                else:
+                    def make_inputs_require_grad(module, input, output):
+                        output.requires_grad_(True)
+                    dino_tower.vision_tower.backbone.model.patch_embed.register_forward_hook(make_inputs_require_grad)
     # import pdb; pdb.set_trace()
     if training_args.bits in [4, 8]:
         from peft.tuners.lora import LoraLayer
@@ -1412,22 +1747,30 @@ def train(attn_implementation=None):
                     if training_args.bf16 and module.weight.dtype == torch.float32:
                         module = module.to(torch.bfloat16)
 
+    # import pdb; pdb.set_trace()
     data_module = make_supervised_data_module(tokenizer=tokenizer,
-                                              data_args=data_args)
+                                              data_args=data_args,
+                                              encoder_type=model_args.encoder_type)
     trainer = RouterLLaVATrainer(model=model,
                     tokenizer=tokenizer,
+                    encoder_type=model_args.encoder_type,
+                    fusion_type_when_preparing_inputs=model_args.fusion_type,
                     args=training_args,
                     **data_module)
+
+    # import pdb; pdb.set_trace()
     trainer.add_callback(
         RouterCallback(
             t_start=training_args.router_temp_start,
             t_end=training_args.router_temp_end,
             schedule=training_args.router_temp_schedule,
-            save_router_stats= model.router.save_router_stats,
+            save_router_stats_clip= model.router_clip.save_router_stats if (hasattr(model, 'router_clip') and model.router_clip is not None) else False,
+            save_router_stats_dino= model.router_dino.save_router_stats if (hasattr(model, 'router_dino') and model.router_dino is not None) else False,
             model = model,
+            trainer = trainer,
         )
     )
-    trainer.router = model.router
+    # trainer.router = model.router
     # import pdb; pdb.set_trace()
     trainable_params =  [n for n,p in model.named_parameters() if p.requires_grad]
     for n in trainable_params:
@@ -1435,6 +1778,53 @@ def train(attn_implementation=None):
         assert 'vision_tower' not in n
     print("TRAINABLE parameters:",
       [n for n,p in model.named_parameters() if p.requires_grad])
+
+    for n,p in model.named_parameters():
+        if p.requires_grad:
+            assert "vision_tower" not in n
+
+    # ---- DIAGNOSTIC BLOCK: remove after confirming ----
+    if local_rank == 0:
+        m = model.get_model()
+        # 1. Confirm clip_dino_fusion is under ZeRO-3 (has ds_id)
+        print("\n[pre-DS] fusion module param status:")
+        if hasattr(m, "clip_dino_fusion"):
+            for n, p in m.clip_dino_fusion.named_parameters():
+                ds_id = getattr(p, "ds_id", "MISSING — not under ZeRO-3!")
+                print(f"  clip_dino_fusion.{n}: ds_id={ds_id}")
+
+        # 2. Check alias ds_ids vs canonical paths (true duplicate check)
+        rank0_print("\n Check alias ds_ids vs canonical paths (true duplicate check)...")
+        for alias_name in ("clip_attn_q", "dino_attn_k", "dino_attn_v"):
+            alias_mod = getattr(m, alias_name, None)
+            canonical_mod = getattr(m.clip_dino_fusion, alias_name, None) if hasattr(m, "clip_dino_fusion") else None
+            if alias_mod is not None and canonical_mod is not None:
+                alias_w_id    = getattr(alias_mod.weight, "ds_id", None)
+                canonical_w_id = getattr(canonical_mod.weight, "ds_id", None)
+                print(f"  {alias_name}: alias ds_id={alias_w_id}, canonical ds_id={canonical_w_id}, "
+                    f"same_object={alias_mod is canonical_mod}, ds_id_match={alias_w_id==canonical_w_id}")
+
+        # 3. Check for true ZeRO-3 ds_id conflicts across full model
+        rank0_print("\n Check for true ZeRO-3 ds_id conflicts across full model...")
+        seen_ds_ids = {}
+        for n, p in model.named_parameters():
+            ds_id = getattr(p, "ds_id", None)
+            if ds_id is None:
+                continue
+            if ds_id in seen_ds_ids:
+                print(f"  [TRUE ds_id CONFLICT] {n} shares ds_id={ds_id} with {seen_ds_ids[ds_id]}")
+            else:
+                seen_ds_ids[ds_id] = n
+
+    if local_rank == 0:
+        id_to_name = {getattr(p, 'ds_id', None): n
+                    for n, p in model.named_parameters()
+                    if getattr(p, 'ds_id', None) is not None}
+        for target_id in [362, 364, 366, 1629, 1631]:
+            print(f"  ds_id={target_id} → {id_to_name.get(target_id, 'NOT FOUND')}")
+
+    # ---- END DIAGNOSTIC BLOCK ----
+
     # import sys; sys.exit(0)
     # ========================= UNCOMMENT ========================= #
     if list(pathlib.Path(training_args.output_dir).glob("checkpoint-*")):

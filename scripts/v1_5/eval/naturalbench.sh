@@ -12,8 +12,10 @@ MAX_NEW_TOKENS="${MAX_NEW_TOKENS:-32}"
 # Optional batch mode:
 # Paste checkpoint directories here to evaluate multiple models in one run.
 # If non-empty, this list takes precedence over --model-path / MODEL_PATH.
-CHECKPOINT_ROOT="/shared/nas2/jk100/MoL/checkpoints"
+CHECKPOINT_ROOT="${CHECKPOINT_ROOT:-/shared/nas2/jk100/MoL/checkpoints}"
 MODEL_PATHS=(
+    # "${CHECKPOINT_ROOT}/llava-v1.5-13b-moe-finetune_dino_no_router"
+    # "${CHECKPOINT_ROOT}/llava-v1.5-13b-moe-finetune_2e-4_text-cond-attn-token-router_learnable-gate_dino_patch_layer_corrected_k=2"
     "liuhaotian/llava-v1.5-13b"
     "${CHECKPOINT_ROOT}/llava-v1.5-13b-moe-finetune_2e-4_router_learnable-gate_scaled-residual"
     "${CHECKPOINT_ROOT}/llava-v1.5-13b-moe-finetune_2e-4_text-cond-attn-layer-router_learnable-gate_scaled-residual"
