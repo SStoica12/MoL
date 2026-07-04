@@ -244,7 +244,7 @@ class CLIPVisionTower(nn.Module):
             image_forward_outs = self.vision_tower(images.to(device=self.device, dtype=self.dtype), output_hidden_states=True)
             image_features = self.feature_select(image_forward_outs).to(images.dtype)
         # pdb.set_trace() # placed pdb here to find where the project was getting called -- press u multiple times
-        import pdb; pdb.set_trace()
+        #import pdb; pdb.set_trace()
         return image_features
 
     @property
