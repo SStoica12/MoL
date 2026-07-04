@@ -77,8 +77,8 @@ class ScaledResidualEncoderLayer(nn.Module):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        attention_mask: torch.Tensor,
-        causal_attention_mask: torch.Tensor,
+        attention_mask: Optional[torch.Tensor] = None,
+        causal_attention_mask: Optional[torch.Tensor] = None,
         output_attentions: Optional[bool] = False,
         **kwargs: Unpack[TransformersKwargs],
     ) -> torch.FloatTensor:

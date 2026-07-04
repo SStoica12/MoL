@@ -3,26 +3,73 @@ from typing import Any
 import torch
 
 
-def _get_router(model) -> Any:
+def _iter_model_wrappers(model):
+    current = model
+    seen = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        yield current
+        current = getattr(current, "module", None)
+
+
+def _get_router(model, router_name: str | None = None) -> Any:
+    names = []
+    if router_name:
+        names.append(router_name)
+    names.extend(["router", "router_dino", "router_clip"])
+    for current in _iter_model_wrappers(model):
+        for name in names:
+            router = getattr(current, name, None)
+            if router is not None:
+                return router
+    return None
+
+
+def _iter_routers(model):
+    yielded = set()
+    for current in _iter_model_wrappers(model):
+        for name in ("router", "router_dino", "router_clip"):
+            router = getattr(current, name, None)
+            if router is not None and id(router) not in yielded:
+                yielded.add(id(router))
+                yield router
+
+
+def _latest_payload(router, router_name: str | None = None):
+    if router_name and "dino" in router_name:
+        return getattr(router, "_latest_routing_decision_dino", None)
+    if router_name and "clip" in router_name:
+        return getattr(router, "_latest_routing_decision_clip", None)
+
+    payload = getattr(router, "_latest_routing_decision", None)
+    if payload:
+        return payload
+    payload = getattr(router, "_latest_routing_decision_dino", None)
+    if payload:
+        return payload
+    return getattr(router, "_latest_routing_decision_clip", None)
+
+
+def clear_router_selection_metadata(model) -> None:
+    for router in _iter_routers(model):
+        if hasattr(router, "clear_latest_routing_decision"):
+            router.clear_latest_routing_decision()
+        else:
+            router._latest_routing_decision = None
+
+
+def _legacy_clear_router_selection_metadata(model) -> None:
     current = model
     seen = set()
     while current is not None and id(current) not in seen:
         seen.add(id(current))
         router = getattr(current, "router", None)
         if router is not None:
-            return router
+            if hasattr(router, "clear_latest_routing_decision"):
+                router.clear_latest_routing_decision()
+            else:
+                router._latest_routing_decision = None
         current = getattr(current, "module", None)
-    return None
-
-
-def clear_router_selection_metadata(model) -> None:
-    router = _get_router(model)
-    if router is None:
-        return
-    if hasattr(router, "clear_latest_routing_decision"):
-        router.clear_latest_routing_decision()
-    else:
-        router._latest_routing_decision = None
 
 
 def _count_layers(selected_layers: torch.Tensor, num_layers_available: int | None) -> dict[str, int]:
@@ -69,12 +116,16 @@ def _layer_frequency(layer_counts: dict[str, int]) -> dict[str, float]:
     }
 
 
-def get_router_selection_metadata(model, batch_index: int = 0) -> dict[str, Any]:
-    router = _get_router(model)
+def get_router_selection_metadata(
+    model,
+    batch_index: int = 0,
+    router_name: str | None = None,
+) -> dict[str, Any]:
+    router = _get_router(model, router_name=router_name)
     if router is None:
         return {}
 
-    payload = getattr(router, "_latest_routing_decision", None)
+    payload = _latest_payload(router, router_name=router_name)
     if not payload:
         return {}
 

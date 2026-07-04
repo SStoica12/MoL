@@ -30,6 +30,110 @@ def rank0_print(*args):
         print(*args)
 
 
+def _load_config_if_available(model_path):
+    try:
+        return AutoConfig.from_pretrained(model_path, trust_remote_code=True)
+    except Exception:
+        return None
+
+
+def _is_lora_checkpoint(model_path, model_name):
+    if "lora" in model_name.lower():
+        return True
+    if isinstance(model_path, str) and os.path.isdir(os.path.expanduser(model_path)):
+        return os.path.isfile(os.path.join(os.path.expanduser(model_path), "adapter_config.json"))
+    return False
+
+
+def _is_multimodal_checkpoint(model_path, model_name, config=None):
+    model_name_lower = model_name.lower()
+    if "llava" in model_name_lower or "bunny" in model_name_lower:
+        return True
+    if config is None:
+        config = _load_config_if_available(model_path)
+    if config is None:
+        return False
+    model_type = str(getattr(config, "model_type", "")).lower()
+    return (
+        model_type.startswith("llava")
+        or hasattr(config, "mm_vision_tower")
+        or bool(getattr(config, "use_mm_proj", False))
+    )
+
+
+def _configure_multimodal_config(config, encoder_type=None, fusion_type=None, mm_use_text_enc=None):
+    vision_tower = str(getattr(config, "mm_vision_tower", "") or getattr(config, "vision_tower", "")).lower()
+    if encoder_type:
+        config.encoder_type = encoder_type
+    current_encoder_type = str(getattr(config, "encoder_type", ""))
+    if (
+        "siglip" in vision_tower
+        and "siglip" not in current_encoder_type
+        and current_encoder_type in ("", "clip", "dinov2_txt", "dinov2_vit", "dino")
+    ):
+        config.encoder_type = "siglip"
+    if not hasattr(config, "encoder_type"):
+        config.encoder_type = "clip"
+    if not hasattr(config, "mm_hidden_size_dino"):
+        config.mm_hidden_size_dino = 1024
+    if fusion_type is not None:
+        config.fusion_type = fusion_type
+    elif not hasattr(config, "fusion_type"):
+        config.fusion_type = "attn"
+    if mm_use_text_enc is not None:
+        config.mm_use_text_enc = mm_use_text_enc
+    return config
+
+
+def _has_clip_like_encoder(encoder_type):
+    encoder_type = str(encoder_type)
+    return "clip" in encoder_type or "siglip" in encoder_type
+
+
+def _vision_tower_device_map(encoder_type, device_map):
+    if "siglip" in str(encoder_type) and device_map == "auto":
+        return None
+    return device_map
+
+
+def _normalise_non_lora_state_dict(state_dict):
+    state_dict = {(k[11:] if k.startswith("base_model.") else k): v for k, v in state_dict.items()}
+    if any(k.startswith("model.model.") for k in state_dict):
+        state_dict = {(k[6:] if k.startswith("model.") else k): v for k, v in state_dict.items()}
+    return state_dict
+
+
+def _load_legacy_single_router_state(model, state_dict, encoder_type):
+    router_attr = "router_dino" if "dino" in str(encoder_type) and not _has_clip_like_encoder(encoder_type) else "router_clip"
+    router = getattr(model, router_attr, None)
+    if router is None:
+        return
+
+    router_state = {}
+    prefixes = (f"{router_attr}.", "router.")
+    for key, value in state_dict.items():
+        normalised = key
+        for prefix in ("base_model.model.", "base_model.", "model."):
+            if normalised.startswith(prefix):
+                normalised = normalised[len(prefix):]
+        for prefix in prefixes:
+            if normalised.startswith(prefix):
+                router_key = normalised[len(prefix):]
+                if router_key == "weights":
+                    router_key = "_weight_fn.weights"
+                router_state[router_key] = value
+                break
+
+    if not router_state:
+        return
+
+    missing, unexpected = router.load_state_dict(router_state, strict=False)
+    if missing or unexpected:
+        rank0_print(f"⚠️  Router state loaded with missing={missing}, unexpected={unexpected}")
+    else:
+        rank0_print(f"✅ Loaded {len(router_state)} router tensors from non_lora_trainables.")
+
+
 #    Copyright 2023 Haotian Liu
 #
 #    Licensed under the Apache License, Version 2.0 (the "License");
@@ -111,19 +215,27 @@ def load_pretrained_model_router_not_fine_tuned(model_path, model_base, model_na
         kwargs['attn_implementation'] = 'flash_attention_2'
     reserve_layer = kwargs.pop('reserve_layer', None) # this is only used for router, not needed for model loading and would cause error if we pass it in
     rank0_print("\n model_name : ", model_name)
-    if 'llava' in model_name.lower():
+    config_probe = _load_config_if_available(model_path)
+    is_multimodal = _is_multimodal_checkpoint(model_path, model_name, config_probe)
+    is_lora_checkpoint = _is_lora_checkpoint(model_path, model_name)
+    non_lora_trainables = None
+    if is_multimodal:
         # Load LLaVA model
-        if 'lora' in model_name.lower() and model_base is None:
+        if is_lora_checkpoint and model_base is None:
             warnings.warn('There is `lora` in model name but no `model_base` is provided. If you are loading a LoRA model, please provide the `model_base` argument. Detailed instruction: https://github.com/haotian-liu/LLaVA#launch-a-model-worker-lora-weights-unmerged.')
-        if 'lora' in model_name.lower() and model_base is not None:
+        if is_lora_checkpoint and model_base is not None:
             from llava.model.language_model.llava_llama import LlavaConfig
             lora_cfg_pretrained = LlavaConfig.from_pretrained(model_path)
-            lora_cfg_pretrained.mm_hidden_size_dino = 1024
-            lora_cfg_pretrained.fusion_type = fusion_type # this only matters if we have clip + dino instance
+            _configure_multimodal_config(
+                lora_cfg_pretrained,
+                encoder_type=encoder_type,
+                fusion_type=fusion_type,
+                mm_use_text_enc=mm_use_text_enc,
+            )
 
             tokenizer = AutoTokenizer.from_pretrained(model_base, use_fast=False)
             rank0_print('Loading LLaVA from base model...')
-            if "clip" in encoder_type and "dino" in encoder_type:
+            if _has_clip_like_encoder(encoder_type) and "dino" in encoder_type:
                 model = DoubleRouterLlavaLlamaForCausalLM().from_pretrained(model_base, low_cpu_mem_usage=True, config=lora_cfg_pretrained, **kwargs)
             else:
                 model = RouterLlavaLlamaForCausalLM.from_pretrained(model_base, low_cpu_mem_usage=True, config=lora_cfg_pretrained, **kwargs)
@@ -146,9 +258,7 @@ def load_pretrained_model_router_not_fine_tuned(model_path, model_base, model_na
                         subfolder=subfolder)
                     return torch.load(cache_file, map_location='cpu')
                 non_lora_trainables = load_from_hf(model_path, 'non_lora_trainables.bin')
-            non_lora_trainables = {(k[11:] if k.startswith('base_model.') else k): v for k, v in non_lora_trainables.items()}
-            if any(k.startswith('model.model.') for k in non_lora_trainables):
-                non_lora_trainables = {(k[6:] if k.startswith('model.') else k): v for k, v in non_lora_trainables.items()}
+            non_lora_trainables = _normalise_non_lora_state_dict(non_lora_trainables)
             model.load_state_dict(non_lora_trainables, strict=False)
 
             from peft import PeftModel
@@ -166,7 +276,13 @@ def load_pretrained_model_router_not_fine_tuned(model_path, model_base, model_na
                     shutil.copyfile(os.path.join(model_base, 'configuration_mpt.py'), os.path.join(model_path, 'configuration_mpt.py'))
                 tokenizer = AutoTokenizer.from_pretrained(model_base, use_fast=True)
                 cfg_pretrained = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
-                if "clip" in encoder_type and "dino" in encoder_type:
+                _configure_multimodal_config(
+                    cfg_pretrained,
+                    encoder_type=encoder_type,
+                    fusion_type=fusion_type,
+                    mm_use_text_enc=mm_use_text_enc,
+                )
+                if _has_clip_like_encoder(encoder_type) and "dino" in encoder_type:
                     model = DoubleRouterLlavaMptForCausalLM.from_pretrained(model_base, low_cpu_mem_usage=True, config=cfg_pretrained, **kwargs)
                 else:
                     model = RouterLlavaMptForCausalLM.from_pretrained(model_base, low_cpu_mem_usage=True, config=cfg_pretrained, **kwargs)
@@ -174,16 +290,20 @@ def load_pretrained_model_router_not_fine_tuned(model_path, model_base, model_na
             else:
                 tokenizer = AutoTokenizer.from_pretrained(model_base, use_fast=False)
                 cfg_pretrained = AutoConfig.from_pretrained(model_path)
-                cfg_pretrained.mm_hidden_size_dino = 1024
-                cfg_pretrained.fusion_type = fusion_type
+                _configure_multimodal_config(
+                    cfg_pretrained,
+                    encoder_type=encoder_type,
+                    fusion_type=fusion_type,
+                    mm_use_text_enc=mm_use_text_enc,
+                )
                 # cfg_pretrained.mm_hidden_size_dino = 1024
                 # cfg_pretrained.fusion_type = fusion_type # this only matters if we have clip + dino instance
-                if "clip" in encoder_type and "dino" in encoder_type:
+                if _has_clip_like_encoder(encoder_type) and "dino" in encoder_type:
                     model = DoubleRouterLlavaLlamaForCausalLM.from_pretrained(model_base, low_cpu_mem_usage=True, config=cfg_pretrained, **kwargs)
                 else:
                     model = RouterLlavaLlamaForCausalLM.from_pretrained(model_base, low_cpu_mem_usage=True, config=cfg_pretrained, **kwargs)
                     model.encoder_type = encoder_type
-            if "clip" in encoder_type:
+            if _has_clip_like_encoder(encoder_type):
                 mm_projector_weights = torch.load(os.path.join(model_path, 'mm_projector.bin'), map_location='cpu')
                 mm_projector_weights = {k: v.to(torch.float16) for k, v in mm_projector_weights.items()}
                 model.load_state_dict(mm_projector_weights, strict=False)
@@ -201,21 +321,25 @@ def load_pretrained_model_router_not_fine_tuned(model_path, model_base, model_na
             cfg_pretrained.attention_bias = False
             cfg_pretrained.attention_dropout = 0.0
             cfg_pretrained.rope_theta = 10000.0
-            cfg_pretrained.encoder_type = encoder_type
-            cfg_pretrained.mm_use_text_enc = mm_use_text_enc
+            _configure_multimodal_config(
+                cfg_pretrained,
+                encoder_type=encoder_type,
+                fusion_type=fusion_type,
+                mm_use_text_enc=mm_use_text_enc,
+            )
             cfg_pretrained.mm_vision_select_layer = -2
             rank0_print("config: ", cfg_pretrained)
             # import sys; sys.exit(0)
             if 'mpt' in model_name.lower():
                 tokenizer = AutoTokenizer.from_pretrained(model_path, use_fast=True)
-                if "clip" in encoder_type and "dino" in encoder_type:
+                if _has_clip_like_encoder(encoder_type) and "dino" in encoder_type:
                     model = DoubleRouterLlavaMptForCausalLM.from_pretrained(model_path, low_cpu_mem_usage=True, config=cfg_pretrained, **kwargs)
                 else:
                     model = RouterLlavaMptForCausalLM.from_pretrained(model_path, low_cpu_mem_usage=True, config=cfg_pretrained, **kwargs)
                     model.encoder_type = encoder_type
             elif 'mistral' in model_name.lower():
                 tokenizer = AutoTokenizer.from_pretrained(model_path)
-                if "clip" in encoder_type and "dino" in encoder_type:
+                if _has_clip_like_encoder(encoder_type) and "dino" in encoder_type:
                     model = DoubleRouterLlavaMistralForCausalLM.from_pretrained(
                         model_path,
                         low_cpu_mem_usage=True,
@@ -232,7 +356,7 @@ def load_pretrained_model_router_not_fine_tuned(model_path, model_base, model_na
                     model.encoder_type = encoder_type
             else:
                 tokenizer = AutoTokenizer.from_pretrained(model_path, use_fast=False)
-                if "clip" in encoder_type and "dino" in encoder_type:
+                if _has_clip_like_encoder(encoder_type) and "dino" in encoder_type:
                     model = DoubleRouterLlavaLlamaForCausalLM.from_pretrained(
                         model_path,
                         low_cpu_mem_usage=True,
@@ -272,7 +396,7 @@ def load_pretrained_model_router_not_fine_tuned(model_path, model_base, model_na
 
     image_processor_dino = None
     image_processor_clip = None
-    if 'llava' in model_name.lower():
+    if is_multimodal:
         mm_use_im_start_end = getattr(model.config, "mm_use_im_start_end", False)
         mm_use_im_patch_token = getattr(model.config, "mm_use_im_patch_token", True)
         if mm_use_im_patch_token:
@@ -291,11 +415,11 @@ def load_pretrained_model_router_not_fine_tuned(model_path, model_base, model_na
                 dino_tower.load_model(device_map=device_map)
             dino_tower.to(device=device, dtype=torch.float16)
             image_processor_dino = dino_tower.image_processor
-        if "clip" in model.config.encoder_type:
+        if _has_clip_like_encoder(model.config.encoder_type):
             vision_tower = model.model.vision_tower
-            vision_tower.load_model(device_map=device_map)
+            vision_tower.load_model(device_map=_vision_tower_device_map(model.config.encoder_type, device_map))
             if not vision_tower.is_loaded:
-                vision_tower.load_model(device_map=device_map)
+                vision_tower.load_model(device_map=_vision_tower_device_map(model.config.encoder_type, device_map))
             vision_tower.to(device=device, dtype=torch.float16)
             image_processor_clip = vision_tower.image_processor
 
@@ -357,7 +481,7 @@ def load_pretrained_model_router_not_fine_tuned(model_path, model_base, model_na
 
             # import pdb; pdb.set_trace()
             model.router_dino.requires_grad_(True) # we need to learn the router
-        if "clip" in model.config.encoder_type:
+        if _has_clip_like_encoder(model.config.encoder_type):
             image_size = vision_tower.vision_tower.config.image_size
             patch_size = vision_tower.vision_tower.config.patch_size
             hidden_size = vision_tower.vision_tower.config.hidden_size
@@ -397,11 +521,11 @@ def load_pretrained_model_router_not_fine_tuned(model_path, model_base, model_na
                                                         confidence_gate=confidence_gate,
                                                         confidence_gate_threshold=confidence_gate_threshold,
                                                         confidence_gate_slope=confidence_gate_slope)
-            model.router_clip.to(device=router_dino_weights.device, dtype=vision_tower.dtype)
+            model.router_clip.to(device=vision_tower.device, dtype=vision_tower.dtype)
             model.router_clip.requires_grad_(True) # we need to learn the router
 
         # overwrite the router weights
-        if "clip" in encoder_type:
+        if _has_clip_like_encoder(encoder_type):
                 mm_projector_weights = torch.load(os.path.join(model_path, 'mm_projector.bin'), map_location='cpu')
                 mm_projector_weights = {k: v.to(torch.float16) for k, v in mm_projector_weights.items()}
                 missing_clip, unexpected_clip = model.load_state_dict(mm_projector_weights, strict=False)
@@ -555,19 +679,27 @@ def load_pretrained_model_router(model_path, model_base, model_name,
         kwargs['attn_implementation'] = 'flash_attention_2'
     reserve_layer = kwargs.pop('reserve_layer', None) # this is only used for router, not needed for model loading and would cause error if we pass it in
     rank0_print("\n model_name : ", model_name)
-    if 'llava' in model_name.lower():
+    config_probe = _load_config_if_available(model_path)
+    is_multimodal = _is_multimodal_checkpoint(model_path, model_name, config_probe)
+    is_lora_checkpoint = _is_lora_checkpoint(model_path, model_name)
+    non_lora_trainables = None
+    if is_multimodal:
         # Load LLaVA model
-        if 'lora' in model_name.lower() and model_base is None:
+        if is_lora_checkpoint and model_base is None:
             warnings.warn('There is `lora` in model name but no `model_base` is provided. If you are loading a LoRA model, please provide the `model_base` argument. Detailed instruction: https://github.com/haotian-liu/LLaVA#launch-a-model-worker-lora-weights-unmerged.')
-        if 'lora' in model_name.lower() and model_base is not None:
+        if is_lora_checkpoint and model_base is not None:
             from llava.model.language_model.llava_llama import LlavaConfig
             lora_cfg_pretrained = LlavaConfig.from_pretrained(model_path)
-            lora_cfg_pretrained.mm_hidden_size_dino = 1024
-            lora_cfg_pretrained.fusion_type = fusion_type # this only matters if we have clip + dino instance
+            _configure_multimodal_config(
+                lora_cfg_pretrained,
+                encoder_type=encoder_type,
+                fusion_type=fusion_type,
+                mm_use_text_enc=mm_use_text_enc,
+            )
 
             tokenizer = AutoTokenizer.from_pretrained(model_base, use_fast=False)
             rank0_print('Loading LLaVA from base model...')
-            if "clip" in encoder_type and "dino" in encoder_type:
+            if _has_clip_like_encoder(encoder_type) and "dino" in encoder_type:
                 model = DoubleRouterLlavaLlamaForCausalLM().from_pretrained(model_base, low_cpu_mem_usage=True, config=lora_cfg_pretrained, **kwargs)
             else:
                 model = RouterLlavaLlamaForCausalLM.from_pretrained(model_base, low_cpu_mem_usage=True, config=lora_cfg_pretrained, **kwargs)
@@ -590,9 +722,7 @@ def load_pretrained_model_router(model_path, model_base, model_name,
                         subfolder=subfolder)
                     return torch.load(cache_file, map_location='cpu')
                 non_lora_trainables = load_from_hf(model_path, 'non_lora_trainables.bin')
-            non_lora_trainables = {(k[11:] if k.startswith('base_model.') else k): v for k, v in non_lora_trainables.items()}
-            if any(k.startswith('model.model.') for k in non_lora_trainables):
-                non_lora_trainables = {(k[6:] if k.startswith('model.') else k): v for k, v in non_lora_trainables.items()}
+            non_lora_trainables = _normalise_non_lora_state_dict(non_lora_trainables)
             model.load_state_dict(non_lora_trainables, strict=False)
 
             from peft import PeftModel
@@ -610,7 +740,13 @@ def load_pretrained_model_router(model_path, model_base, model_name,
                     shutil.copyfile(os.path.join(model_base, 'configuration_mpt.py'), os.path.join(model_path, 'configuration_mpt.py'))
                 tokenizer = AutoTokenizer.from_pretrained(model_base, use_fast=True)
                 cfg_pretrained = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
-                if "clip" in encoder_type and "dino" in encoder_type:
+                _configure_multimodal_config(
+                    cfg_pretrained,
+                    encoder_type=encoder_type,
+                    fusion_type=fusion_type,
+                    mm_use_text_enc=mm_use_text_enc,
+                )
+                if _has_clip_like_encoder(encoder_type) and "dino" in encoder_type:
                     model = DoubleRouterLlavaMptForCausalLM.from_pretrained(model_base, low_cpu_mem_usage=True, config=cfg_pretrained, **kwargs)
                 else:
                     model = RouterLlavaMptForCausalLM.from_pretrained(model_base, low_cpu_mem_usage=True, config=cfg_pretrained, **kwargs)
@@ -618,16 +754,20 @@ def load_pretrained_model_router(model_path, model_base, model_name,
             else:
                 tokenizer = AutoTokenizer.from_pretrained(model_base, use_fast=False)
                 cfg_pretrained = AutoConfig.from_pretrained(model_path)
-                cfg_pretrained.mm_hidden_size_dino = 1024
-                cfg_pretrained.fusion_type = fusion_type
+                _configure_multimodal_config(
+                    cfg_pretrained,
+                    encoder_type=encoder_type,
+                    fusion_type=fusion_type,
+                    mm_use_text_enc=mm_use_text_enc,
+                )
                 # cfg_pretrained.mm_hidden_size_dino = 1024
                 # cfg_pretrained.fusion_type = fusion_type # this only matters if we have clip + dino instance
-                if "clip" in encoder_type and "dino" in encoder_type:
+                if _has_clip_like_encoder(encoder_type) and "dino" in encoder_type:
                     model = DoubleRouterLlavaLlamaForCausalLM.from_pretrained(model_base, low_cpu_mem_usage=True, config=cfg_pretrained, **kwargs)
                 else:
                     model = RouterLlavaLlamaForCausalLM.from_pretrained(model_base, low_cpu_mem_usage=True, config=cfg_pretrained, **kwargs)
                     model.encoder_type = encoder_type
-            if "clip" in encoder_type:
+            if _has_clip_like_encoder(encoder_type):
                 mm_projector_weights = torch.load(os.path.join(model_path, 'mm_projector.bin'), map_location='cpu')
                 mm_projector_weights = {k: v.to(torch.float16) for k, v in mm_projector_weights.items()}
                 model.load_state_dict(mm_projector_weights, strict=False)
@@ -645,21 +785,25 @@ def load_pretrained_model_router(model_path, model_base, model_name,
             cfg_pretrained.attention_bias = False
             cfg_pretrained.attention_dropout = 0.0
             cfg_pretrained.rope_theta = 10000.0
-            cfg_pretrained.encoder_type = encoder_type
-            cfg_pretrained.mm_use_text_enc = mm_use_text_enc
+            _configure_multimodal_config(
+                cfg_pretrained,
+                encoder_type=encoder_type,
+                fusion_type=fusion_type,
+                mm_use_text_enc=mm_use_text_enc,
+            )
             cfg_pretrained.mm_vision_select_layer = -2
             rank0_print("config: ", cfg_pretrained)
             # import sys; sys.exit(0)
             if 'mpt' in model_name.lower():
                 tokenizer = AutoTokenizer.from_pretrained(model_path, use_fast=True)
-                if "clip" in encoder_type and "dino" in encoder_type:
+                if _has_clip_like_encoder(encoder_type) and "dino" in encoder_type:
                     model = DoubleRouterLlavaMptForCausalLM.from_pretrained(model_path, low_cpu_mem_usage=True, config=cfg_pretrained, **kwargs)
                 else:
                     model = RouterLlavaMptForCausalLM.from_pretrained(model_path, low_cpu_mem_usage=True, config=cfg_pretrained, **kwargs)
                     model.encoder_type = encoder_type
             elif 'mistral' in model_name.lower():
                 tokenizer = AutoTokenizer.from_pretrained(model_path)
-                if "clip" in encoder_type and "dino" in encoder_type:
+                if _has_clip_like_encoder(encoder_type) and "dino" in encoder_type:
                     model = DoubleRouterLlavaMistralForCausalLM.from_pretrained(
                         model_path,
                         low_cpu_mem_usage=True,
@@ -676,7 +820,7 @@ def load_pretrained_model_router(model_path, model_base, model_name,
                     model.encoder_type = encoder_type
             else:
                 tokenizer = AutoTokenizer.from_pretrained(model_path, use_fast=False)
-                if "clip" in encoder_type and "dino" in encoder_type:
+                if _has_clip_like_encoder(encoder_type) and "dino" in encoder_type:
                     model = DoubleRouterLlavaLlamaForCausalLM.from_pretrained(
                         model_path,
                         low_cpu_mem_usage=True,
@@ -716,7 +860,7 @@ def load_pretrained_model_router(model_path, model_base, model_name,
 
     image_processor_dino = None
     image_processor_clip = None
-    if 'llava' in model_name.lower():
+    if is_multimodal:
         mm_use_im_start_end = getattr(model.config, "mm_use_im_start_end", False)
         mm_use_im_patch_token = getattr(model.config, "mm_use_im_patch_token", True)
         if mm_use_im_patch_token:
@@ -735,11 +879,11 @@ def load_pretrained_model_router(model_path, model_base, model_name,
                 dino_tower.load_model(device_map=device_map)
             dino_tower.to(device=device, dtype=torch.float16)
             image_processor_dino = dino_tower.image_processor
-        if "clip" in model.config.encoder_type:
+        if _has_clip_like_encoder(model.config.encoder_type):
             vision_tower = model.model.vision_tower
-            vision_tower.load_model(device_map=device_map)
+            vision_tower.load_model(device_map=_vision_tower_device_map(model.config.encoder_type, device_map))
             if not vision_tower.is_loaded:
-                vision_tower.load_model(device_map=device_map)
+                vision_tower.load_model(device_map=_vision_tower_device_map(model.config.encoder_type, device_map))
             vision_tower.to(device=device, dtype=torch.float16)
             image_processor_clip = vision_tower.image_processor
 
@@ -801,7 +945,7 @@ def load_pretrained_model_router(model_path, model_base, model_name,
 
             # import pdb; pdb.set_trace()
             model.router_dino.requires_grad_(True) # we need to learn the router
-        if "clip" in model.config.encoder_type:
+        if _has_clip_like_encoder(model.config.encoder_type):
             image_size = vision_tower.vision_tower.config.image_size
             patch_size = vision_tower.vision_tower.config.patch_size
             hidden_size = vision_tower.vision_tower.config.hidden_size
@@ -841,19 +985,23 @@ def load_pretrained_model_router(model_path, model_base, model_name,
                                                         confidence_gate=confidence_gate,
                                                         confidence_gate_threshold=confidence_gate_threshold,
                                                         confidence_gate_slope=confidence_gate_slope)
-            model.router_clip.to(device=router_dino_weights.device, dtype=vision_tower.dtype)
+            model.router_clip.to(device=vision_tower.device, dtype=vision_tower.dtype)
             model.router_clip.requires_grad_(True) # we need to learn the router
+
+        if non_lora_trainables is not None:
+            _load_legacy_single_router_state(model, non_lora_trainables, model.config.encoder_type)
 
         # overwrite the router weights
         rank0_print("♻️  Overwriting Router weights with custom finetuned weights...")
         index_path = os.path.join(model_path, "model.safetensors.index.json")
         if not os.path.isfile(index_path):
-            raise FileNotFoundError(f"Missing: {index_path}")
+            rank0_print(f"⚠️  Missing {index_path}; skipping full-checkpoint router shard restore.")
+            weight_map = {}
+        else:
+            with open(index_path, "r") as f:
+                index = json.load(f)
 
-        with open(index_path, "r") as f:
-            index = json.load(f)
-
-        weight_map = index["weight_map"]
+            weight_map = index["weight_map"]
         # find router key in the big model checkpoint
         router_keys_dino = [k for k in weight_map.keys() if "router_dino" in k.lower() and ("weight" in k.lower())]
         router_keys_clip = [k for k in weight_map.keys() if "router_clip" in k.lower() and ("weight" in k.lower())]
@@ -967,14 +1115,18 @@ def load_pretrained_model(model_path, model_base, model_name, encoder_type ="din
     if use_flash_attn:
         kwargs['attn_implementation'] = 'flash_attention_2'
     # import pdb; pdb.set_trace()
-    if 'llava' in model_name.lower():
+    config_probe = _load_config_if_available(model_path)
+    is_multimodal = _is_multimodal_checkpoint(model_path, model_name, config_probe)
+    is_lora_checkpoint = _is_lora_checkpoint(model_path, model_name)
+    if is_multimodal:
         # Load LLaVA model
         # import pdb; pdb.set_trace()
-        if 'lora' in model_name.lower() and model_base is None:
+        if is_lora_checkpoint and model_base is None:
             warnings.warn('There is `lora` in model name but no `model_base` is provided. If you are loading a LoRA model, please provide the `model_base` argument. Detailed instruction: https://github.com/haotian-liu/LLaVA#launch-a-model-worker-lora-weights-unmerged.')
-        if 'lora' in model_name.lower() and model_base is not None:
+        if is_lora_checkpoint and model_base is not None:
             from llava.model.language_model.llava_llama import LlavaConfig
             lora_cfg_pretrained = LlavaConfig.from_pretrained(model_path)
+            _configure_multimodal_config(lora_cfg_pretrained, encoder_type=encoder_type)
             tokenizer = AutoTokenizer.from_pretrained(model_base, use_fast=False)
             rank0_print('Loading LLaVA from base model...')
             model = LlavaLlamaForCausalLM.from_pretrained(model_base, low_cpu_mem_usage=True, config=lora_cfg_pretrained, **kwargs)
@@ -996,9 +1148,7 @@ def load_pretrained_model(model_path, model_base, model_name, encoder_type ="din
                         subfolder=subfolder)
                     return torch.load(cache_file, map_location='cpu')
                 non_lora_trainables = load_from_hf(model_path, 'non_lora_trainables.bin')
-            non_lora_trainables = {(k[11:] if k.startswith('base_model.') else k): v for k, v in non_lora_trainables.items()}
-            if any(k.startswith('model.model.') for k in non_lora_trainables):
-                non_lora_trainables = {(k[6:] if k.startswith('model.') else k): v for k, v in non_lora_trainables.items()}
+            non_lora_trainables = _normalise_non_lora_state_dict(non_lora_trainables)
             model.load_state_dict(non_lora_trainables, strict=False)
 
             from peft import PeftModel
@@ -1015,10 +1165,12 @@ def load_pretrained_model(model_path, model_base, model_name, encoder_type ="din
                     shutil.copyfile(os.path.join(model_base, 'configuration_mpt.py'), os.path.join(model_path, 'configuration_mpt.py'))
                 tokenizer = AutoTokenizer.from_pretrained(model_base, use_fast=True)
                 cfg_pretrained = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
+                _configure_multimodal_config(cfg_pretrained, encoder_type=encoder_type)
                 model = LlavaMptForCausalLM.from_pretrained(model_base, low_cpu_mem_usage=True, config=cfg_pretrained, **kwargs)
             else:
                 tokenizer = AutoTokenizer.from_pretrained(model_base, use_fast=False)
                 cfg_pretrained = AutoConfig.from_pretrained(model_path)
+                _configure_multimodal_config(cfg_pretrained, encoder_type=encoder_type)
                 model = LlavaLlamaForCausalLM.from_pretrained(model_base, low_cpu_mem_usage=True, config=cfg_pretrained, **kwargs)
 
             mm_projector_weights = torch.load(os.path.join(model_path, 'mm_projector.bin'), map_location='cpu')
@@ -1031,7 +1183,7 @@ def load_pretrained_model(model_path, model_base, model_name, encoder_type ="din
             cfg_pretrained.attention_bias = False
             cfg_pretrained.attention_dropout = 0.0
             cfg_pretrained.rope_theta = 10000.0
-            cfg_pretrained.encoder_type = encoder_type
+            _configure_multimodal_config(cfg_pretrained, encoder_type=encoder_type)
             cfg_pretrained.mm_vision_select_layer = -2
 
             if 'mpt' in model_name.lower():
@@ -1077,7 +1229,7 @@ def load_pretrained_model(model_path, model_base, model_name, encoder_type ="din
 
     image_processor_clip = None
     image_processor_dino = None
-    if 'llava' in model_name.lower():
+    if is_multimodal:
         mm_use_im_start_end = getattr(model.config, "mm_use_im_start_end", False)
         mm_use_im_patch_token = getattr(model.config, "mm_use_im_patch_token", True)
         if mm_use_im_patch_token:
@@ -1097,11 +1249,11 @@ def load_pretrained_model(model_path, model_base, model_name, encoder_type ="din
                 dino_tower.load_model(device_map=device_map)
             dino_tower.to(device=device, dtype=torch.float16)
             image_processor_dino = dino_tower.image_processor
-        if "clip" in model.config.encoder_type:
+        if _has_clip_like_encoder(model.config.encoder_type):
             vision_tower = model.model.vision_tower
-            vision_tower.load_model(device_map=device_map)
+            vision_tower.load_model(device_map=_vision_tower_device_map(model.config.encoder_type, device_map))
             if not vision_tower.is_loaded:
-                vision_tower.load_model(device_map=device_map)
+                vision_tower.load_model(device_map=_vision_tower_device_map(model.config.encoder_type, device_map))
             vision_tower.to(device=device, dtype=torch.float16)
             image_processor_clip = vision_tower.image_processor
 

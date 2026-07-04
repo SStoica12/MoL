@@ -55,6 +55,7 @@ IS_TOKENIZER_GREATER_THAN_0_14 = version.parse(tokenizers.__version__) >= versio
 @dataclass
 class ModelArguments:
     model_name_or_path: Optional[str] = field(default="facebook/opt-125m")
+    model_type: Optional[str] = field(default=None)
     version: Optional[str] = field(default="v0")
     freeze_backbone: bool = field(default=False)
     tune_mm_mlp_adapter: bool = field(default=False)
@@ -1257,7 +1258,7 @@ def train(attn_implementation=None):
             cache_dir=training_args.cache_dir,
             model_max_length=training_args.model_max_length,
             padding_side="right",
-            use_fast=False,
+            use_fast=model_args.model_type == "llama3-8b",
         )
     # tokenizer is of type transformers.models.llama.tokenization_llama.LlamaTokenizer
     # print("\n tokenizer is of type: ", type(tokenizer))
@@ -1277,6 +1278,14 @@ def train(attn_implementation=None):
             conversation_lib.default_conversation = conversation_lib.conv_templates[model_args.version]
         else:
             conversation_lib.default_conversation = conversation_lib.conv_templates["vicuna_v1"]
+
+    if model_args.model_type == "llama3-8b":
+        tokenizer.eos_token_id = 128001
+        if tokenizer.eos_token is None:
+            tokenizer.eos_token = tokenizer.convert_ids_to_tokens(tokenizer.eos_token_id)
+        tokenizer.pad_token = tokenizer.eos_token
+        model.config.eos_token_id = tokenizer.eos_token_id
+        model.config.pad_token_id = tokenizer.pad_token_id
 
     if model_args.vision_tower is not None:
         # import pdb; pdb.set_trace()

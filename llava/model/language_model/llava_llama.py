@@ -578,7 +578,8 @@ class RouterLlavaLlamaForCausalLM(LlavaLlamaForCausalLM):
         assert hidden_states.ndim == 4
         # import pdb; pdb.set_trace()
         image_features = self.router_clip(hidden_states[1:, :, :, :], text_embeds=text_embeds, text_attention_mask=text_attention_mask, type=type_encoder) # do not want to include the embedding layer
-        assert image_features.requires_grad == True
+        if torch.is_grad_enabled():
+            assert image_features.requires_grad == True
         # import pdb; pdb.set_trace()
         image_features = self.get_model().mm_projector(image_features) # Just one project?
         # assert image_features.requires_grad == True

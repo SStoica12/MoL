@@ -18,6 +18,7 @@ import types
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from transformers import AutoConfig
 
 from llava.constants import (
     IMAGE_TOKEN_INDEX,
@@ -32,6 +33,92 @@ def rank0_print(*args):
     local_rank = int(os.environ.get("LOCAL_RANK", 0))
     if local_rank == 0:
         print(*args)
+
+
+def _load_eval_config(model_path: str):
+    try:
+        return AutoConfig.from_pretrained(model_path, trust_remote_code=True)
+    except Exception as exc:
+        rank0_print(f"[eval][WARN] Could not load config from {model_path}: {exc}")
+        return None
+
+
+def _infer_encoder_type_from_config(config, fallback: str) -> str:
+    if config is None:
+        return fallback
+
+    configured = getattr(config, "encoder_type", None)
+    vision_tower = str(getattr(config, "mm_vision_tower", "") or getattr(config, "vision_tower", "")).lower()
+
+    if "siglip" in vision_tower:
+        return "siglip"
+    if configured:
+        return configured
+    if "dino" in vision_tower:
+        return "dinov2_txt"
+    if "clip" in vision_tower or "openai" in vision_tower or "laion" in vision_tower:
+        return "clip"
+    return fallback
+
+
+def _apply_checkpoint_eval_defaults(args):
+    config = _load_eval_config(os.path.expanduser(args.model_path))
+    if config is None:
+        return
+
+    model_type = str(getattr(config, "model_type", "")).lower()
+    is_multimodal = (
+        model_type.startswith("llava")
+        or hasattr(config, "mm_vision_tower")
+        or bool(getattr(config, "use_mm_proj", False))
+    )
+    has_router = (
+        bool(getattr(config, "use_text_conditioned_router", False))
+        or bool(getattr(config, "use_text_only_gating", False))
+        or bool(getattr(config, "has_router", False))
+    )
+
+    if is_multimodal and has_router and not args.use_router:
+        rank0_print("[eval] Auto-enabling router from checkpoint config.")
+        args.use_router = True
+
+    inferred_encoder_type = _infer_encoder_type_from_config(config, args.encoder_type)
+    if inferred_encoder_type != args.encoder_type:
+        rank0_print(f"[eval] Using encoder_type={inferred_encoder_type} inferred from checkpoint config.")
+        args.encoder_type = inferred_encoder_type
+
+    if args.use_router and ("clip" in args.encoder_type or "siglip" in args.encoder_type) and "dino" not in args.encoder_type:
+        args.router_name = "clip"
+
+    for attr in (
+        "num_layers_to_choose",
+        "force_reserve_layer",
+        "reserve_layer",
+        "learnable_gate",
+        "confidence_gate",
+        "confidence_gate_threshold",
+        "confidence_gate_slope",
+        "hybrid_reserve_mode",
+        "hybrid_disagreement_metric",
+        "text_pool",
+        "text_scale",
+        "text_conditioning",
+        "text_attention_type",
+        "text_attention_dim",
+        "attn_level",
+        "fusion_type",
+    ):
+        if hasattr(config, attr):
+            if attr == "num_layers_to_choose" and args.num_layers_to_choose is not None:
+                rank0_print(
+                    f"[eval] Overriding checkpoint num_layers_to_choose={getattr(config, attr)} "
+                    f"with CLI value {args.num_layers_to_choose}."
+                )
+                continue
+            setattr(args, attr, getattr(config, attr))
+
+    if bool(getattr(config, "mm_use_text_enc", False)):
+        args.mm_use_text_enc = True
 
 def setup_router_prob_capture(model):
     """Monkey-patch router_probs on each router to collect probs during eval.
@@ -166,7 +253,7 @@ class CustomDataset(Dataset):
 
         if has_image:
             replace_token = DEFAULT_IMAGE_TOKEN
-            if self.model_config.mm_use_im_start_end:
+            if getattr(self.model_config, "mm_use_im_start_end", False):
                 replace_token = DEFAULT_IM_START_TOKEN + DEFAULT_IMAGE_TOKEN + DEFAULT_IM_END_TOKEN
 
             if IMAGE_PLACEHOLDER in qs:
@@ -182,7 +269,7 @@ class CustomDataset(Dataset):
                         f"Question {line.get('question_id')} has {len(image_files)} images but "
                         f"{qs.count(DEFAULT_IMAGE_TOKEN)} <image> tokens."
                     )
-                if self.model_config.mm_use_im_start_end:
+                if getattr(self.model_config, "mm_use_im_start_end", False):
                     qs = qs.replace(DEFAULT_IMAGE_TOKEN, replace_token)
             else:
                 qs = "\n".join([replace_token] * len(image_files)) + '\n' + qs
@@ -322,6 +409,9 @@ def verify_loaded_model(
     if not shard_files:
         rank0_print(f"⚠️  No .safetensors shards found in {model_path}. Skipping verification.")
         return {}
+    if os.path.isfile(os.path.join(model_path, "adapter_config.json")):
+        rank0_print("ℹ️  PEFT adapter checkpoint detected; skipping strict adapter-key coverage after LoRA merge.")
+        strict_key_coverage = False
 
     # --- Router dtype check ---
     router_key_candidates = [k for k in live_state_dict.keys() if "router" in k]
@@ -724,6 +814,9 @@ def _extract_router_metadata(model, router_name: str, batch_index: int = 0) -> d
 
 
 def eval_model(args):
+    _apply_checkpoint_eval_defaults(args)
+    if args.num_layers_to_choose is None:
+        args.num_layers_to_choose = 1
     rank0_print("args.use_router:", args.use_router)
     disable_torch_init()
     router_name = args.router_name # will dino, clip, or dino_clip
@@ -770,7 +863,7 @@ def eval_model(args):
                                                                                model_name=model_name,
                                                                                encoder_type=args.encoder_type,)
 
-    verify_loaded_model(model, model_path)
+    verify_loaded_model(model, model_path, check_router_dtype=next(model.parameters()).dtype)
     # import sys; sys.exit(0)
     # import pdb; pdb.set_trace()
     router_prob_buffers = setup_router_prob_capture(model) if use_router else {}
@@ -931,7 +1024,7 @@ if __name__ == "__main__":
     parser.add_argument("--model-path", type=str, default="facebook/opt-350m")
     parser.add_argument("--use_router", action="store_true")
     parser.add_argument("--router_name", type=str, default="dino")
-    parser.add_argument("--num_layers_to_choose", type=int, default=1)
+    parser.add_argument("--num_layers_to_choose", type=int, default=None)
     parser.add_argument("--router_alpha", type=int, default=10**-2)
     parser.add_argument("--model-base", type=str, default=None)
     parser.add_argument("--image-folder", type=str, default="")

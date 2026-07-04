@@ -8,6 +8,15 @@ TEMPERATURE="${TEMPERATURE:-0}"
 TOP_P="${TOP_P:-}"
 NUM_BEAMS="${NUM_BEAMS:-1}"
 MAX_NEW_TOKENS="${MAX_NEW_TOKENS:-128}"
+ROUTER_K="${ROUTER_K:-}"
+ROUTER_K_ARGS=()
+if [[ -n "${ROUTER_K}" ]]; then
+    ROUTER_K_ARGS+=(--num_layers_to_choose "${ROUTER_K}")
+fi
+EVAL_NAME_SUFFIX="${EVAL_NAME_SUFFIX:-}"
+if [[ -n "${ROUTER_K}" && -z "${EVAL_NAME_SUFFIX}" ]]; then
+    EVAL_NAME_SUFFIX="_eval_k${ROUTER_K}"
+fi
 
 # Optional batch mode:
 # Paste checkpoint directories here to evaluate multiple models in one run.
@@ -55,6 +64,7 @@ Options:
   --top-p FLOAT
   --num-beams INT
   --max-new-tokens INT
+  ROUTER_K=INT environment variable overrides checkpoint top-k at eval time
   --benchmark-dir DIR
   --hf-dataset REPO
   --hf-revision REV
@@ -149,6 +159,7 @@ run_eval_for_model() {
         "${TOP_P_ARGS[@]}" \
         --num_beams "${NUM_BEAMS}" \
         --max_new_tokens "${MAX_NEW_TOKENS}" \
+        "${ROUTER_K_ARGS[@]}" \
         --conv-mode "${CONV_MODE}"
 
     python llava/eval/eval_vstar.py \
@@ -162,7 +173,7 @@ if [[ ${#MODEL_PATHS[@]} -gt 0 ]]; then
     output_root="${OUTPUT_DIR:-${BENCHMARK_DIR}/answers}"
     mkdir -p "${output_root}"
     for model_path in "${MODEL_PATHS[@]}"; do
-        ckpt_name_local="$(basename "${model_path}")"
+        ckpt_name_local="$(basename "${model_path}")${EVAL_NAME_SUFFIX}"
         answers_file_local="${output_root}/${ckpt_name_local}/predictions.jsonl"
         summary_file_local="${output_root}/${ckpt_name_local}/summary.json"
         detail_file_local="${output_root}/${ckpt_name_local}/details.jsonl"
@@ -170,7 +181,7 @@ if [[ ${#MODEL_PATHS[@]} -gt 0 ]]; then
     done
 else
     if [[ -z "${CKPT_NAME}" ]]; then
-        CKPT_NAME="$(basename "${MODEL_PATH}")"
+        CKPT_NAME="$(basename "${MODEL_PATH}")${EVAL_NAME_SUFFIX}"
     fi
     if [[ -z "${OUTPUT_DIR}" ]]; then
         OUTPUT_DIR="${BENCHMARK_DIR}/answers/${CKPT_NAME}"

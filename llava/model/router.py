@@ -533,6 +533,10 @@ class TextConditionedRouter(Router):
         hybrid_disagreement_metric: str = "kl_local_global",
         force_reserve_layer: bool = False,
         reserve_layer: int = -2,
+        save_router_stats: bool = True,
+        save_steps_router_stats: int = 200,
+        cap_softmax: bool = False,
+        cap_softmax_value: float = 0.06,
         learnable_gate: bool = False,
         confidence_gate: bool = False,
         confidence_gate_threshold: float = 0.6,
@@ -546,6 +550,10 @@ class TextConditionedRouter(Router):
             load_balancing_alpha,
             force_reserve_layer=force_reserve_layer,
             reserve_layer=reserve_layer,
+            save_router_stats=save_router_stats,
+            save_steps_router_stats=save_steps_router_stats,
+            cap_softmax=cap_softmax,
+            cap_softmax_value=cap_softmax_value,
             learnable_gate=learnable_gate,
             confidence_gate=confidence_gate,
             confidence_gate_threshold=confidence_gate_threshold,
@@ -660,7 +668,13 @@ class TextConditionedRouter(Router):
         return None
 
     def _infer_text_hidden_size(self, config):
-        if "clip" in config.encoder_type or "siglip" in config.encoder_type:
+        for name in ("mm_text_hidden_size", "text_hidden_size", "dino_mm_text_hidden_size"):
+            value = getattr(config, name, None)
+            if value is not None:
+                return value
+
+        encoder_type = getattr(config, "encoder_type", "")
+        if "clip" in encoder_type or "siglip" in encoder_type:
             for name in ("mm_text_hidden_size", "text_hidden_size"):
                 value = getattr(config, name, None)
                 if value is not None:
@@ -1477,6 +1491,220 @@ class TextConditionedRouter(Router):
         assert image_features.ndim == 3
         return image_features
 
+    def analyze(self, hidden_states, text_embeds=None, text_attention_mask=None, type="clip"):
+        if text_embeds is None:
+            raise ValueError("TextConditionedRouter.analyze requires text embeddings.")
+        if self.text_conditioning not in ("attention", "attn"):
+            raise ValueError(
+                "TextConditionedRouter.analyze currently supports attention-based routers only."
+            )
+
+        L, _, _, H = hidden_states.shape
+        self.num_layers = L
+        self.clear_latest_routing_decision()
+
+        patch_attention_scores = self._compute_patch_attention_scores(
+            hidden_states,
+            text_embeds,
+            text_attention_mask,
+        ).permute(1, 0, 2).to(torch.float32)  # [B, L, N]
+
+        analysis = {
+            "patch_attention_scores": patch_attention_scores,
+            "selection_mode": None,
+            "selected_layers": None,
+            "selected_probs": None,
+            "reserve_layer_prob": None,
+            "reserve_layer_index": None,
+            "hybrid_disagreement": None,
+            "pre_projector_features": None,
+            "pre_projector_route_features": None,
+            "pre_projector_reserve_features": None,
+        }
+
+        if self.attn_level == "patch_layer":
+            router_probs, router_probs_for_selection, reserve_layer_prob = self._patch_layer_router_probs(
+                hidden_states,
+                text_embeds,
+                text_attention_mask,
+                save_stats=False,
+            )
+            hidden_states = hidden_states.permute(1, 2, 0, 3)  # [B, N, L, H]
+            layers, probs, reserve_layer_prob = self._get_patch_layer_and_scaling_probs(
+                router_probs,
+                router_probs_for_selection,
+                reserve_layer_prob,
+            )
+            self._cache_latest_routing_decision(
+                "patch_level",
+                layers,
+                probs,
+                reserve_layer_prob=reserve_layer_prob,
+                type=type,
+            )
+            layers = layers.to(hidden_states.device)
+            gather_idx = layers.unsqueeze(-1).expand(-1, -1, -1, H)
+            selected_hidden_states = torch.gather(hidden_states, 2, gather_idx)
+            probs = probs.to(device=hidden_states.device, dtype=hidden_states.dtype)
+            route_features = (probs.unsqueeze(-1) * selected_hidden_states).sum(dim=2)
+            reserve_features = None
+            final_features = route_features
+            reserve_idx = None
+
+            if self.force_reserve_layer:
+                reserve_idx = self._resolve_reserve_idx(L)
+                reserve_features = hidden_states[:, :, reserve_idx, :]
+                reserve_layer_prob = reserve_layer_prob.to(
+                    device=hidden_states.device,
+                    dtype=hidden_states.dtype,
+                )
+                final_features = final_features + reserve_layer_prob.unsqueeze(-1) * reserve_features
+
+            analysis.update({
+                "selection_mode": "patch_level",
+                "selected_layers": layers,
+                "selected_probs": probs.to(torch.float32),
+                "reserve_layer_prob": reserve_layer_prob,
+                "reserve_layer_index": reserve_idx,
+                "pre_projector_features": self._select_vision_features(final_features),
+                "pre_projector_route_features": self._select_vision_features(route_features),
+                "pre_projector_reserve_features": (
+                    self._select_vision_features(reserve_features)
+                    if reserve_features is not None
+                    else None
+                ),
+            })
+            return analysis
+
+        if self.attn_level == "hybrid":
+            (
+                router_probs,
+                router_probs_for_selection,
+                reserve_layer_prob,
+                hybrid_extra_payload,
+            ) = self._hybrid_patch_layer_router_probs(
+                hidden_states,
+                text_embeds,
+                text_attention_mask,
+                save_stats=False,
+            )
+            hidden_states = hidden_states.permute(1, 2, 0, 3)  # [B, N, L, H]
+            layers, probs, reserve_layer_prob = self._get_patch_layer_and_scaling_probs(
+                router_probs,
+                router_probs_for_selection,
+                reserve_layer_prob,
+            )
+            self._cache_latest_routing_decision(
+                "hybrid_patch_level",
+                layers,
+                probs,
+                reserve_layer_prob=reserve_layer_prob,
+                extra_payload=hybrid_extra_payload,
+                type=type,
+            )
+            layers = layers.to(hidden_states.device)
+            gather_idx = layers.unsqueeze(-1).expand(-1, -1, -1, H)
+            selected_hidden_states = torch.gather(hidden_states, 2, gather_idx)
+            probs = probs.to(device=hidden_states.device, dtype=hidden_states.dtype)
+            route_features = (probs.unsqueeze(-1) * selected_hidden_states).sum(dim=2)
+            reserve_features = None
+            final_features = route_features
+            reserve_idx = None
+
+            if self.force_reserve_layer:
+                reserve_idx = self._resolve_reserve_idx(L)
+                reserve_features = hidden_states[:, :, reserve_idx, :]
+                reserve_layer_prob = reserve_layer_prob.to(
+                    device=hidden_states.device,
+                    dtype=hidden_states.dtype,
+                )
+                final_features = final_features + reserve_layer_prob.unsqueeze(-1) * reserve_features
+
+            analysis.update({
+                "selection_mode": "hybrid_patch_level",
+                "selected_layers": layers,
+                "selected_probs": probs.to(torch.float32),
+                "reserve_layer_prob": reserve_layer_prob,
+                "reserve_layer_index": reserve_idx,
+                "hybrid_disagreement": hybrid_extra_payload.get("hybrid_disagreement"),
+                "pre_projector_features": self._select_vision_features(final_features),
+                "pre_projector_route_features": self._select_vision_features(route_features),
+                "pre_projector_reserve_features": (
+                    self._select_vision_features(reserve_features)
+                    if reserve_features is not None
+                    else None
+                ),
+            })
+            return analysis
+
+        router_probs = self.router_probs(hidden_states, text_embeds, text_attention_mask)
+        if self.force_reserve_layer:
+            layers, probs, reserve_layer_prob = self.get_layer_and_scaling_probs(router_probs)
+            self._cache_latest_routing_decision(
+                "image_level",
+                layers,
+                probs,
+                reserve_layer_prob=reserve_layer_prob,
+                type=type,
+            )
+        else:
+            layers, probs = self.get_layer_and_scaling_probs(router_probs)
+            reserve_layer_prob = None
+            self._cache_latest_routing_decision("image_level", layers, probs, type=type)
+
+        hidden_states = hidden_states.transpose(0, 1)  # [B, L, N, H]
+        layers = layers.to(hidden_states.device)
+        k = layers.shape[1]
+        gather_idx = layers.reshape(hidden_states.shape[0], k, 1, 1).expand(
+            hidden_states.shape[0],
+            k,
+            hidden_states.shape[2],
+            H,
+        )
+        hidden_states_chosen = torch.gather(hidden_states, 1, gather_idx)
+        probs = probs.to(device=hidden_states_chosen.device, dtype=hidden_states_chosen.dtype)
+        route_features = probs.reshape(hidden_states.shape[0], k, 1, 1) * hidden_states_chosen
+        if k > 1:
+            route_features = route_features.sum(dim=1, keepdim=True)
+
+        reserve_features = None
+        final_features = route_features
+        reserve_idx = None
+        if self.force_reserve_layer:
+            reserve_idx = self._resolve_reserve_idx(L)
+            reserve_features = hidden_states[:, reserve_idx, :, :].unsqueeze(1)
+            reserve_layer_prob = reserve_layer_prob.to(
+                device=hidden_states_chosen.device,
+                dtype=hidden_states_chosen.dtype,
+            )
+            final_features = final_features + reserve_layer_prob.reshape(
+                hidden_states.shape[0],
+                -1,
+                1,
+                1,
+            ) * reserve_features
+
+        final_features = final_features.squeeze(1)
+        route_features = route_features.squeeze(1)
+        if reserve_features is not None:
+            reserve_features = reserve_features.squeeze(1)
+
+        analysis.update({
+            "selection_mode": "image_level",
+            "selected_layers": layers,
+            "selected_probs": probs.to(torch.float32),
+            "reserve_layer_prob": reserve_layer_prob,
+            "reserve_layer_index": reserve_idx,
+            "pre_projector_features": self._select_vision_features(final_features),
+            "pre_projector_route_features": self._select_vision_features(route_features),
+            "pre_projector_reserve_features": (
+                self._select_vision_features(reserve_features)
+                if reserve_features is not None
+                else None
+            ),
+        })
+        return analysis
+
 
 class TextOnlyRouter(Router):
     """
@@ -1492,6 +1720,10 @@ class TextOnlyRouter(Router):
         text_scale: float = 1.0,
         force_reserve_layer: bool = False,
         reserve_layer: int = -2,
+        save_router_stats: bool = True,
+        save_steps_router_stats: int = 200,
+        cap_softmax: bool = False,
+        cap_softmax_value: float = 0.06,
         learnable_gate: bool = False,
         confidence_gate: bool = False,
         confidence_gate_threshold: float = 0.6,
@@ -1505,6 +1737,10 @@ class TextOnlyRouter(Router):
             load_balancing_alpha,
             force_reserve_layer=force_reserve_layer,
             reserve_layer=reserve_layer,
+            save_router_stats=save_router_stats,
+            save_steps_router_stats=save_steps_router_stats,
+            cap_softmax=cap_softmax,
+            cap_softmax_value=cap_softmax_value,
             learnable_gate=learnable_gate,
             confidence_gate=confidence_gate,
             confidence_gate_threshold=confidence_gate_threshold,
@@ -1532,7 +1768,13 @@ class TextOnlyRouter(Router):
                 self.text_to_router = self.text_to_router.to(device=device, dtype=dtype)
 
     def _infer_text_hidden_size(self, config):
-        if "clip" in config.encoder_type or "siglip" in config.encoder_type:
+        for name in ("mm_text_hidden_size", "text_hidden_size", "dino_mm_text_hidden_size"):
+            value = getattr(config, name, None)
+            if value is not None:
+                return value
+
+        encoder_type = getattr(config, "encoder_type", "")
+        if "clip" in encoder_type or "siglip" in encoder_type:
             for name in ("mm_text_hidden_size", "text_hidden_size"):
                 value = getattr(config, name, None)
                 if value is not None:
@@ -1696,4 +1938,3 @@ class TextOnlyRouter(Router):
         image_features = self._select_vision_features(image_features)
         assert image_features.ndim == 3
         return image_features
-

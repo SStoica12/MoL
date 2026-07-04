@@ -75,6 +75,15 @@ def parse_args():
         type=int,
         default=0,
     )
+    parser.add_argument(
+        "--allow-missing-checkpoints",
+        action="store_true",
+        help=(
+            "Summarize existing router_analysis_samples.jsonl files even when the "
+            "corresponding checkpoint directory is not present. This is useful "
+            "when recreating plots from shared evaluation outputs."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -654,8 +663,18 @@ def main():
         analysis_file_name=args.analysis_file_name,
     )
 
+    candidate_models = list(runnable)
+    if args.allow_missing_checkpoints:
+        seen = {record["model_name"] for record in candidate_models}
+        for record in appendix:
+            if record["model_name"] in seen:
+                continue
+            if record.get("has_analysis"):
+                candidate_models.append(record)
+                seen.add(record["model_name"])
+
     usable_models = []
-    for record in runnable:
+    for record in candidate_models:
         if record["has_analysis"]:
             usable_models.append(record)
         else:

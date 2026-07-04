@@ -16,7 +16,7 @@ from llava.eval.router_logging import (
     clear_router_selection_metadata,
     get_router_selection_metadata,
 )
-from llava.model.builder import load_pretrained_model
+from llava.model.builder import load_pretrained_model_router
 from llava.mm_utils import get_model_name_from_path
 from llava.utils import disable_torch_init
 
@@ -25,6 +25,11 @@ from vstar_router_analysis_utils import (
     infer_attention_family,
     load_json,
     load_jsonl,
+    prepare_router_text_context,
+    router_loader_kwargs,
+    router_vision_tower,
+    infer_router_kind,
+    run_vision_tower_for_router_analysis,
 )
 
 
@@ -204,14 +209,17 @@ def main():
     )
 
     disable_torch_init()
-    tokenizer, model, image_processor, _ = load_pretrained_model(
+    loader_kwargs = router_loader_kwargs(model_path, model_name)
+    router_kind = infer_router_kind(loader_kwargs["encoder_type"])
+    tokenizer, model, image_processor_dino, image_processor_clip, _ = load_pretrained_model_router(
         str(model_path),
         args.model_base,
         get_model_name_from_path(str(model_path)),
+        **loader_kwargs,
     )
     model.eval()
 
-    router = getattr(model, "router", None)
+    router = getattr(model, f"router_{router_kind}", None)
     if router is None or not hasattr(router, "analyze"):
         raise ValueError(f"Model does not expose a compatible router analysis path: {model_name}")
     if getattr(router, "text_conditioning", None) not in ("attention", "attn"):
@@ -230,14 +238,14 @@ def main():
         questions,
         args.image_folder,
         tokenizer,
-        image_processor,
+        image_processor_dino,
+        image_processor_clip,
         model.config,
         conv_mode=args.conv_mode,
         num_workers=args.num_workers,
     )
 
-    vision_tower_wrapper = model.get_model().get_vision_tower()
-    vision_tower = vision_tower_wrapper.vision_tower
+    vision_tower_wrapper = router_vision_tower(model, router_kind)
     distance_matrix = build_distance_matrix(vision_tower_wrapper).to(
         device=vision_tower_wrapper.device,
         dtype=torch.float32,
@@ -247,7 +255,7 @@ def main():
     output_file.parent.mkdir(parents=True, exist_ok=True)
     with open(output_file, "w", encoding="utf-8") as fout:
         iterator = zip(data_loader, questions)
-        for (input_ids, image_tensor, image_sizes, prompt), question in tqdm(
+        for (input_ids, image_tensor_clip, image_tensor_dino, image_sizes), question in tqdm(
             iterator,
             total=len(questions),
             desc=f"Collecting router analysis for {model_name}",
@@ -256,36 +264,45 @@ def main():
             detail = details.get(question_id)
             if detail is None:
                 raise KeyError(f"Missing details row for question_id={question_id}")
+            image_tensor = image_tensor_dino if router_kind == "dino" else image_tensor_clip
+            if isinstance(image_tensor, tuple) and len(image_tensor) == 1:
+                image_tensor = image_tensor[0]
             if image_tensor is None:
                 raise ValueError(f"Expected an image for V*Bench sample {question_id}")
 
             input_ids = input_ids.to(device="cuda", non_blocking=True)
             attention_mask = torch.ones_like(input_ids, dtype=torch.bool)
+            prompt = question.get("text", question.get("question", ""))
 
             with torch.inference_mode():
                 clear_router_selection_metadata(model)
-                text_embeds, text_attention_mask = model.prepare_router_text_context(
+                text_embeds, text_attention_mask = prepare_router_text_context(
+                    model,
                     input_ids,
-                    attention_mask=attention_mask,
-                    clip_texts=[prompt],
+                    attention_mask,
+                    [prompt],
+                    router_kind,
                 )
                 image_inputs = move_images_to_device(
                     image_tensor,
                     vision_tower_wrapper.device,
                     vision_tower_wrapper.dtype,
                 )
-                image_forward_outs = vision_tower(
+                image_forward_outs, hidden_states = run_vision_tower_for_router_analysis(
+                    vision_tower_wrapper,
                     image_inputs,
-                    output_hidden_states=True,
-                    output_attentions=True,
+                    router_kind,
                 )
-                hidden_states = torch.stack(list(image_forward_outs.hidden_states))[1:]
                 analysis = router.analyze(
                     hidden_states,
                     text_embeds=text_embeds,
                     text_attention_mask=text_attention_mask,
+                    type=router_kind,
                 )
-                metadata = get_router_selection_metadata(model).get("router", {})
+                metadata = get_router_selection_metadata(
+                    model,
+                    router_name=f"router_{router_kind}",
+                ).get("router", {})
 
             if not metadata:
                 raise RuntimeError(f"Router analysis did not populate metadata for {question_id}")

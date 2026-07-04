@@ -3,6 +3,7 @@ import torch.nn as nn
 import torchvision.transforms as T
 from transformers import CLIPVisionConfig, CLIPTokenizer, CLIPTextModel
 import torch.nn.functional as F
+from types import SimpleNamespace
 
 IMAGENET_DEFAULT_MEAN = (0.485, 0.456, 0.406)
 IMAGENET_DEFAULT_STD = (0.229, 0.224, 0.225)
@@ -119,7 +120,7 @@ class DINOVisionTower(nn.Module):
         return image_features
 
     @torch.no_grad()
-    def forward(self, images, output_hidden_states=False):
+    def forward(self, images, output_hidden_states=False, output_attentions=False):
         # we need to wrap forward_features to get the hidden states.
         # import pdb; pdb.set_trace()
         # if output_hidden_states:
@@ -131,11 +132,12 @@ class DINOVisionTower(nn.Module):
                     # https://github.com/facebookresearch/dinov2/blob/7b187bd4df8efce2cbcbbb67bd01532c19bf4c9c/dinov2/hub/text/vision_tower.py#L162
                     device = next(model.parameters()).device # for some reason images were on device 2 rather than the device the model parameters were on
                     _, patch_tokens = model.get_class_and_patch_tokens(images.to(device=device)) # we can not do forward because it would pool the patch tokens, and llava projector expects all 257 patch tokens
-                    return {"x_prenorm" : patch_tokens}, None # this should hopefully be ok?
+                    return {"x_prenorm" : patch_tokens}, None, None # this should hopefully be ok?
                 else:
-                    return model.forward_features(imgs), None # forward_features is dict of dict_keys(['x_norm_clstoken', 'x_norm_regtokens', 'x_norm_patchtokens', 'x_prenorm', 'masks']). x_prenorm has shape torch.Size([32, 257 or 261, 1024])
+                    return model.forward_features(imgs), None, None # forward_features is dict of dict_keys(['x_norm_clstoken', 'x_norm_regtokens', 'x_norm_patchtokens', 'x_prenorm', 'masks']). x_prenorm has shape torch.Size([32, 257 or 261, 1024])
             # import pdb; pdb.set_trace()
             hidden_states = []
+            attentions = []
             if "registers" in self.vision_tower_name or "txt" in self.vision_tower_name: # we need to remove the registers
                 if "registers" in self.vision_tower_name:
                     blocks = model.blocks
@@ -156,9 +158,44 @@ class DINOVisionTower(nn.Module):
                 ]
             else:
                 norm_layer = model.norm
+                blocks = model.blocks
                 hooks = [
                     block.register_forward_hook(lambda module, input, output: hidden_states.append(norm_layer(output)))
                     for block in model.blocks # this had [:self.select_layer] ?
+                ]
+            attention_hooks = []
+            if output_attentions:
+                num_register_tokens = self.config.num_register_tokens
+
+                def attention_hook(module, inputs):
+                    attn_input = inputs[0]
+                    B, N, C = attn_input.shape
+                    qkv = module.qkv(attn_input).reshape(
+                        B,
+                        N,
+                        3,
+                        module.num_heads,
+                        C // module.num_heads,
+                    )
+                    q, k, _ = torch.unbind(qkv, 2)
+                    scores = torch.einsum("bnhd,bmhd->bhnm", q, k) * module.scale
+                    attn = scores.softmax(dim=-1)
+                    if num_register_tokens:
+                        keep = torch.cat([
+                            torch.zeros(1, dtype=torch.long, device=attn.device),
+                            torch.arange(
+                                1 + num_register_tokens,
+                                N,
+                                dtype=torch.long,
+                                device=attn.device,
+                            ),
+                        ])
+                        attn = attn.index_select(-1, keep).index_select(-2, keep)
+                    attentions.append(attn.detach())
+
+                attention_hooks = [
+                    block.attn.register_forward_pre_hook(attention_hook)
+                    for block in blocks
                 ]
             try:
                 if "txt" in self.vision_tower_name:
@@ -171,27 +208,36 @@ class DINOVisionTower(nn.Module):
             finally:
                 for h in hooks:
                     h.remove()
+                for h in attention_hooks:
+                    h.remove()
             # import pdb; pdb.set_trace()
             hidden_states = [model.head(h) for h in hidden_states] # apply the head to each hidden state. This is important because the head has a projection and without it, the hidden states would be in a different space than the output features that the router dino uses.
             hidden_states = [h[:, 1+self.config.num_register_tokens:, :] for h in hidden_states] # remove register tokens AFTER passing through head?
-            return out, tuple(hidden_states)
+            return out, tuple(hidden_states), tuple(attentions)
         # import pdb; pdb.set_trace()
         backbone = self.vision_tower
 
         if type(images) is list:
+            if output_attentions:
+                raise ValueError("DINO attention collection expects batched tensor images, not a list.")
             image_features = []
             hidden_states_all = []
             for image in images:
-                out, hs = _forward_features(backbone, image.to(device=self.device, dtype=self.dtype).unsqueeze(0))
+                out, hs, _ = _forward_features(backbone, image.to(device=self.device, dtype=self.dtype).unsqueeze(0))
                 image_features.append(self.feature_select(out).to(image.dtype))
                 if hs is not None:
                     hidden_states_all.append(hs)
         else:
             # import pdb; pdb.set_trace()
             # print("self.device : ", images.to(device=self.device, dtype=self.dtype).device)
-            out, hidden_states_all = _forward_features(backbone, images.to(device=self.device, dtype=self.dtype))
+            out, hidden_states_all, attentions_all = _forward_features(backbone, images.to(device=self.device, dtype=self.dtype))
             image_features = self.feature_select(out).to(images.dtype)
 
+        if output_attentions:
+            return SimpleNamespace(
+                hidden_states=hidden_states_all,
+                attentions=attentions_all,
+            )
         if output_hidden_states:
             return image_features, hidden_states_all
         return image_features
@@ -218,6 +264,10 @@ class DINOVisionTower(nn.Module):
         # 224 / 14 = 16, 16*16 = 256 patch tokens
         # registers are filtered out in feature_select, so this stays 256
         return 256
+
+    @property
+    def num_patches_per_side(self):
+        return self.config.image_size // self.config.patch_size
 
 
 class DinoVisionTextTower(DINOVisionTower):  #
