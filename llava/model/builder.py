@@ -1058,32 +1058,31 @@ def load_pretrained_model_router(model_path, model_base, model_name,
                 rank0_print("⚠️  Warning: No custom router keys found in shards.")
 
         if ("clip" in encoder_type or "siglip" in encoder_type) and ("dino" in encoder_type): # we need to load in clip_dino_fusion weights as well
-            fusion_keys = [k for k in weight_map.keys() if "fusion" in k.lower() and ("weight" in k.lower())]
+            fusion_module = getattr(model.get_model(), "clip_dino_fusion", None)
+            fusion_keys = [k for k in weight_map.keys() if "clip_dino_fusion" in k]
             rank0_print("fusion_keys : ", fusion_keys)
-            shard_file_fusion = weight_map[fusion_keys[0]]
-            shard_path = os.path.join(model_path, shard_file_fusion)
-            rank0_print(f"\n    Loaded checkpoint path {shard_path}")
-            shard_weights = safe_load_file(shard_path)  # loads CPU tensors
-            fusion_state_dict_dino = {}
-            for key, value in shard_weights.items():
-                    # We filter for keys belonging to the router
-                    if "clip_dino_fusion" in key:
-                        key = key.replace("model.clip_dino_fusion.", "")  # need just weights
-                        # assert key == "weights"
-                        fusion_state_dict_dino[key] = value
-            #    strict=False is crucial because we are only loading the vision subset
-            # import pdb; pdb.set_trace()
-            if len(fusion_state_dict_dino) > 0:
-                missing, unexpected = model.get_model().clip_dino_fusion.load_state_dict(fusion_state_dict_dino, strict=False)
-                if len(missing) != 0 or len(unexpected) != 0:
-                    rank0_print("missing: ", missing)
-                    rank0_print("unexpected: ", unexpected)
-                    # rank0_print(missing, unexpected)
-                    import pdb; pdb.set_trace()
+            if fusion_module is not None and fusion_keys:
+                fusion_state_dict_dino = {}
+                for shard_file_fusion in sorted({weight_map[k] for k in fusion_keys}):
+                    shard_path = os.path.join(model_path, shard_file_fusion)
+                    rank0_print(f"\n    Loaded checkpoint path {shard_path}")
+                    shard_weights = safe_load_file(shard_path)  # loads CPU tensors
+                    for key, value in shard_weights.items():
+                        if "clip_dino_fusion" in key:
+                            key = key.replace("model.clip_dino_fusion.", "")  # need just weights
+                            fusion_state_dict_dino[key] = value
+                if len(fusion_state_dict_dino) > 0:
+                    missing, unexpected = fusion_module.load_state_dict(fusion_state_dict_dino, strict=False)
+                    if len(missing) != 0 or len(unexpected) != 0:
+                        rank0_print("missing: ", missing)
+                        rank0_print("unexpected: ", unexpected)
+                    else:
+                        rank0_print(f"Successfully restored {len(fusion_state_dict_dino)} custom clip_dino_fusion keys.")
                 else:
-                    rank0_print(f"✅ Successfully restored {len(fusion_state_dict_dino)} custome fusion clip dino attn keys.")
+                    rank0_print("Warning: No custom clip_dino_fusion weights found in shards.")
             else:
-                rank0_print("⚠️  Warning: No custome fusion clip dino attn found in shards.")
+                rank0_print("Warning: No clip_dino_fusion module or keys found in shards.")
+
 
     if hasattr(model.config, "max_sequence_length"):
         context_len = model.config.max_sequence_length

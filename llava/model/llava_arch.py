@@ -589,12 +589,12 @@ class LlavaMetaForCausalLM(ABC):
         input_ids = [cur_input_ids[cur_attention_mask] for cur_input_ids, cur_attention_mask in zip(input_ids, attention_mask)] # batch_size
         labels = [cur_labels[cur_attention_mask] for cur_labels, cur_attention_mask in zip(labels, attention_mask)] # batch_size
 
-        # Pre-compute attention-based clip+dino fusion for all images in one module call.
+        # Pre-compute module-based clip+dino fusion for all images in one module call.
         # Keeping this inside a single module forward helps ZeRO-3 offload keep
         # parameter gather/release lifecycle consistent.
         merged_features_all = None
         if (
-            getattr(self.config, 'fusion_type', '') == "attn"
+            getattr(self.config, 'fusion_type', '') in ("attn", "film")
             and ("clip" in encoder_type or "siglip" in encoder_type)
             and "dino" in encoder_type
             and image_features_clip is not None
@@ -690,12 +690,14 @@ class LlavaMetaForCausalLM(ABC):
                             )
                             cur_image_features_dino = cur_image_features_dino.reshape(cur_image_features_clip.shape) # torch.Size([252, 5120])
                             merged_features = torch.cat([cur_image_features_clip, cur_image_features_dino], dim=-1)
-                        else:
+                        elif fusion_type in ("attn", "film"):
                             if merged_features_all is None:
                                 raise RuntimeError(
-                                    "fusion_type='attn' requires clip_dino_fusion to be initialized."
+                                    f"fusion_type='{fusion_type}' requires clip_dino_fusion to be initialized."
                                 )
                             merged_features = merged_features_all[img_idx]
+                        else:
+                            raise ValueError(f"Unexpected fusion_type: {fusion_type}")
                         cur_new_input_embeds.append(merged_features)
                         cur_new_labels.append(torch.full((merged_features.shape[0],), IGNORE_INDEX, device=cur_labels.device, dtype=cur_labels.dtype))
                     elif cur_image_features_clip is not None:

@@ -3,7 +3,7 @@ export DS_BUILD_CPU_ADAM=0
 
 export WANDB_ENTITY="uiucnlp"
 export WANDB_PROJECT="mixture-of-layers"
-export WANDB_NAME="MoL_router_choose_layers_text-cond-attn-hybrid-router_disagreement-gate_lr1e-5-pretrain_lr2e-5-finetune"
+export WANDB_NAME="MoL_clip-dino-film_router_choose_layers_text-cond-attn-hybrid-router_disagreement-gate_lr5e-5-pretrain_lr2e-5-finetune"
 export WANDB_MODE="online"  # ensure it uploads
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -11,8 +11,8 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 DEEPSPEED_CONFIG="${DEEPSPEED_CONFIG:-${REPO_ROOT}/scripts/zero3.json}"
 DATA_PATH="${DATA_PATH:-/shared/nas2/sstoica2/LLaVA/playground/data/eval/llava_v1_5_mix665k.json}"
 IMAGE_FOLDER="${IMAGE_FOLDER:-/shared/nas2/sstoica2/LLaVA/playground/data/eval}"
-PRETRAIN_DIR="${PRETRAIN_DIR:-${REPO_ROOT}/checkpoints/llava-v1.5-13b-moe-pretrain_1e-5_text-cond-attn-hybrid-router_pretrain_disagreement-gate}"
-OUTPUT_DIR="${OUTPUT_DIR:-${REPO_ROOT}/checkpoints/llava-v1.5-13b-moe-finetune_text-cond-attn-hybrid-router_disagreement-gate_lr1e-5-pretrain_lr2e-5-finetune}"
+PRETRAIN_DIR="${PRETRAIN_DIR:-${REPO_ROOT}/checkpoints/llava-v1.5-13b-moe-pretrain_5e-5_clip-dino-film_text-cond-attn-hybrid-router_pretrain_disagreement-gate}"
+OUTPUT_DIR="${OUTPUT_DIR:-${REPO_ROOT}/checkpoints/llava-v1.5-13b-moe-finetune_clip-dino-film_text-cond-attn-hybrid-router_disagreement-gate_lr5e-5-pretrain_lr2e-5-finetune}"
 MASTER_PORT="${MASTER_PORT:-29600}"
 
 deepspeed "${REPO_ROOT}/llava/train/train_mem_router.py" \
@@ -22,7 +22,10 @@ deepspeed "${REPO_ROOT}/llava/train/train_mem_router.py" \
     --data_path "${DATA_PATH}" \
     --image_folder "${IMAGE_FOLDER}" \
     --vision_tower openai/clip-vit-large-patch14-336 \
+    --encoder_type clip_dino \
+    --fusion_type film \
     --pretrain_mm_mlp_adapter "${PRETRAIN_DIR}/mm_projector.bin" \
+    --pretrain_dino_mm_mlp_adapter "${PRETRAIN_DIR}/dino_mm_projector.bin" \
     --mm_projector_type mlp2x_gelu \
     --freeze_residual_scaling_coef True \
     --mm_vision_select_layer -2 \

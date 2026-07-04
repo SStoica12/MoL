@@ -96,7 +96,7 @@ class ModelArguments:
     confidence_gate_threshold: float = 0.6
     confidence_gate_slope: float = 10.0
     encoder_type: str = "clip"
-    fusion_type: str = "cross_attn" # options: cross_attn, mean_pooling, concate_upsample
+    fusion_type: str = "attn" # options: attn, film, mean_pooling, concate_upsample
 
 
 @dataclass
@@ -1143,7 +1143,7 @@ def train(attn_implementation=None):
             quantization_config=BitsAndBytesConfig(
                 load_in_4bit=training_args.bits == 4,
                 load_in_8bit=training_args.bits == 8,
-                llm_int8_skip_modules=["mm_projector", "router_dino", "router_clip", "dino_mm_projector"],
+                llm_int8_skip_modules=["mm_projector", "router_dino", "router_clip", "dino_mm_projector", "clip_dino_fusion"],
                 llm_int8_threshold=6.0,
                 llm_int8_has_fp16_weight=False,
                 bnb_4bit_compute_dtype=compute_dtype,
@@ -1580,22 +1580,27 @@ def train(attn_implementation=None):
             rank0_print(" \n loaded router_clip weights...")
 
             # import pdb; pdb.set_trace()
-            attn_mode =  getattr(model.get_model(), "clip_dino_fusion", None)
-            if model_args.fusion_type == "attn" and ("clip" in model_args.encoder_type or "siglip" in model_args.encoder_type) and "dino" in model_args.encoder_type:
-                assert attn_mode is not None, "we are using attn to merge clip and dino features but clip_dino_fusion is not Initailized"
-            if attn_mode is not None:
-                for attn_name in ("clip_attn_q", "dino_attn_k", "dino_attn_v", "clip_features_norm", "dino_features_norm"):
-                    attn_mode_layer = getattr(attn_mode, attn_name)
-                    attn_w = {k.split(f"model.clip_dino_fusion.{attn_name}.")[1]: v for k, v in weights.items() if f"model.clip_dino_fusion.{attn_name}." in k}
-                    try:
-                        attn_mode_layer.load_state_dict(attn_w)
-                    except:
-                        from deepspeed import zero
-                        with zero.GatheredParameters(list(attn_mode_layer.parameters()), modifier_rank=0):
-                            for pname, param in attn_mode_layer.named_parameters():
-                                if pname in attn_w:
-                                    param.data.copy_(attn_w[pname])
-                                    rank0_print(f"Loaded pretrained weights for {attn_name}")
+            fusion_module = getattr(model.get_model(), "clip_dino_fusion", None)
+            uses_clip_dino_fusion = (
+                model_args.fusion_type in ("attn", "film")
+                and ("clip" in model_args.encoder_type or "siglip" in model_args.encoder_type)
+                and "dino" in model_args.encoder_type
+            )
+            if uses_clip_dino_fusion:
+                assert fusion_module is not None, (
+                    f"fusion_type={model_args.fusion_type!r} requires clip_dino_fusion, but it was not initialized"
+                )
+            if fusion_module is not None:
+                fusion_prefix = "model.clip_dino_fusion."
+                fusion_w = {k.split(fusion_prefix, 1)[1]: v for k, v in weights.items() if fusion_prefix in k}
+                if fusion_w:
+                    missing, unexpected = fusion_module.load_state_dict(fusion_w, strict=False)
+                    rank0_print(
+                        f"Loaded {len(fusion_w)} pretrained clip_dino_fusion tensors "
+                        f"with missing={missing}, unexpected={unexpected}"
+                    )
+                else:
+                    rank0_print("No pretrained clip_dino_fusion weights found in pretrain_mm_mlp_adapter.")
 
         # import pdb; pdb.set_trace()
         if model_args.pretrain_dino_mm_mlp_adapter is not None:
@@ -1644,18 +1649,20 @@ def train(attn_implementation=None):
                     if 'scaling_coef' not in n:
                         p.requires_grad_(True)
 
-        attn_mode =  getattr(model.get_model(), "clip_dino_fusion", None)
-        if model_args.fusion_type == "attn" and ("clip" in model_args.encoder_type or "siglip" in model_args.encoder_type) and "dino" in model_args.encoder_type:
-            assert attn_mode is not None, "we are using attn to merge clip and dino features but clip_dino_fusion is not Initailized"
+        fusion_module = getattr(model.get_model(), "clip_dino_fusion", None)
+        uses_clip_dino_fusion = (
+            model_args.fusion_type in ("attn", "film")
+            and ("clip" in model_args.encoder_type or "siglip" in model_args.encoder_type)
+            and "dino" in model_args.encoder_type
+        )
+        if uses_clip_dino_fusion:
+            assert fusion_module is not None, (
+                f"fusion_type={model_args.fusion_type!r} requires clip_dino_fusion, but it was not initialized"
+            )
         # import pdb; pdb.set_trace()
-        if attn_mode is not None:
-            for attn_name in ("clip_attn_q", "dino_attn_k", "dino_attn_v", "clip_features_norm", "dino_features_norm"):
-                attn_mod = getattr(attn_mode, attn_name, None)
-                if attn_mod is None and hasattr(model, "get_model"):
-                    attn_mod = getattr(model.get_model(), attn_name, None)
-                if attn_mod is not None:
-                    for p in attn_mod.parameters():
-                        p.requires_grad = True
+        if fusion_module is not None:
+            for p in fusion_module.parameters():
+                p.requires_grad = True
 
         if model_args.tune_mm_mlp_adapter:
             # import pdb; pdb.set_trace()
@@ -1716,6 +1723,8 @@ def train(attn_implementation=None):
                 model.get_model().mm_projector.to(dtype=compute_dtype, device=training_args.device)
             if hasattr(model.get_model(), "dino_mm_projector"):
                 model.get_model().dino_mm_projector.to(dtype=compute_dtype, device=training_args.device)
+            if hasattr(model.get_model(), "clip_dino_fusion"):
+                model.get_model().clip_dino_fusion.to(dtype=compute_dtype, device=training_args.device)
 
         model.config.mm_use_im_start_end = data_args.mm_use_im_start_end = model_args.mm_use_im_start_end
         model.config.mm_projector_lr = training_args.mm_projector_lr

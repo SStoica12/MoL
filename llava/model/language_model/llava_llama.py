@@ -13,10 +13,12 @@
 #    limitations under the License.
 
 
+import math
 from typing import List, Optional, Tuple, Union
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from transformers import AutoConfig, AutoModelForCausalLM, \
                          LlamaConfig, LlamaModel, LlamaForCausalLM
@@ -66,6 +68,104 @@ class ClipDinoCrossAttentionFusion(nn.Module):
         rank0_print("\n scores:", scores.mean().item(), scores.std().item(), scores.abs().max().item())
         rank0_print("\n finite:", torch.isfinite(scores).all().item(), torch.isfinite(attn).all().item())
         return attn @ v
+
+
+class ClipDinoFiLMFusion(nn.Module):
+    """Use DINO patch features to FiLM-modulate CLIP patch features."""
+
+    def __init__(self, hidden_size: int):
+        super().__init__()
+        self.clip_features_norm = nn.LayerNorm(hidden_size)
+        self.dino_features_norm = nn.LayerNorm(hidden_size)
+        self.film = nn.Sequential(
+            nn.Linear(hidden_size * 2, hidden_size),
+            nn.GELU(),
+            nn.Linear(hidden_size, hidden_size * 2),
+        )
+        nn.init.zeros_(self.film[-1].weight)
+        nn.init.zeros_(self.film[-1].bias)
+
+    @staticmethod
+    def _split_cls_token(features: torch.Tensor) -> Tuple[Optional[torch.Tensor], torch.Tensor]:
+        num_tokens = features.shape[1]
+        side = math.isqrt(num_tokens)
+        if side * side == num_tokens:
+            return None, features
+
+        patch_tokens = num_tokens - 1
+        side = math.isqrt(patch_tokens)
+        if patch_tokens > 0 and side * side == patch_tokens:
+            return features[:, :1], features[:, 1:]
+
+        return None, features
+
+    @staticmethod
+    def _infer_square_hw(num_tokens: int, feature_name: str) -> Tuple[int, int]:
+        side = math.isqrt(num_tokens)
+        if side * side != num_tokens:
+            raise ValueError(
+                f"ClipDinoFiLMFusion expects {feature_name} patch tokens to form a square grid, "
+                f"but received {num_tokens} tokens."
+            )
+        return side, side
+
+    def _resize_dino_to_clip_grid(
+        self,
+        dino_patches: torch.Tensor,
+        clip_hw: Tuple[int, int],
+    ) -> torch.Tensor:
+        batch_size, num_dino_patches, hidden_size = dino_patches.shape
+        dino_h, dino_w = self._infer_square_hw(num_dino_patches, "DINO")
+        dino_grid = dino_patches.reshape(batch_size, dino_h, dino_w, hidden_size).permute(0, 3, 1, 2)
+        interp_dtype = dino_grid.dtype
+        dino_grid = F.interpolate(
+            dino_grid.float(),
+            size=clip_hw,
+            mode="bilinear",
+            align_corners=False,
+        ).to(dtype=interp_dtype)
+        return dino_grid.permute(0, 2, 3, 1).reshape(batch_size, clip_hw[0] * clip_hw[1], hidden_size)
+
+    def forward(self, clip_features: torch.Tensor, dino_features: torch.Tensor) -> torch.Tensor:
+        if isinstance(clip_features, (list, tuple)):
+            if not isinstance(dino_features, (list, tuple)) or len(clip_features) != len(dino_features):
+                raise ValueError("CLIP and DINO feature lists must have the same length for FiLM fusion.")
+            return [self.forward(cur_clip, cur_dino) for cur_clip, cur_dino in zip(clip_features, dino_features)]
+
+        squeeze_batch = clip_features.dim() == 2
+        if squeeze_batch:
+            clip_features = clip_features.unsqueeze(0)
+            dino_features = dino_features.unsqueeze(0)
+
+        if clip_features.dim() != 3 or dino_features.dim() != 3:
+            raise ValueError(
+                "ClipDinoFiLMFusion expects CLIP and DINO features shaped [B, N, H] or [N, H]."
+            )
+
+        clip_cls, clip_patches = self._split_cls_token(clip_features)
+        _, dino_patches = self._split_cls_token(dino_features)
+        clip_hw = self._infer_square_hw(clip_patches.shape[1], "CLIP")
+        dino_aligned = self._resize_dino_to_clip_grid(dino_patches, clip_hw)
+        dino_aligned = dino_aligned.to(device=clip_patches.device, dtype=clip_patches.dtype)
+
+        film_input = torch.cat(
+            [
+                self.clip_features_norm(clip_patches),
+                self.dino_features_norm(dino_aligned),
+            ],
+            dim=-1,
+        )
+        gamma, beta = self.film(film_input).chunk(2, dim=-1)
+        fused_patches = clip_patches * (1.0 + gamma) + beta
+
+        if clip_cls is not None:
+            fused_features = torch.cat([clip_cls, fused_patches], dim=1)
+        else:
+            fused_features = fused_patches
+
+        if squeeze_batch:
+            fused_features = fused_features.squeeze(0)
+        return fused_features
 
 
 def _config_requires_router(config):
@@ -163,6 +263,7 @@ def rank0_print(*args):
 class LlavaConfig(LlamaConfig):
     model_type = "llava_llama"
     encoder_type: str = "clip" # or dinov2_txt or clip-dinov2_txt
+    fusion_type: str = "attn"
     fussion_type: str = "attn"
 
 
@@ -186,13 +287,14 @@ class LlavaLlamaForCausalLM(LlamaForCausalLM, LlavaMetaForCausalLM):
         # import pdb; pdb.set_trace()
         enc_type = getattr(config, 'encoder_type', '')
         if ("clip" in enc_type or "siglip" in enc_type) and "dino" in enc_type:
-            if getattr(config, 'fusion_type', '') == "attn":
+            fusion_type = getattr(config, 'fusion_type', 'attn')
+            if fusion_type == "attn":
                 self.model.clip_dino_fusion = ClipDinoCrossAttentionFusion(config.hidden_size)
-                # # Keep aliases for existing checkpoint-loading/training code paths.
-                # self.model.clip_attn_q = self.model.clip_dino_fusion.clip_attn_q
-                # self.model.dino_attn_k = self.model.clip_dino_fusion.dino_attn_k
-                # self.model.dino_attn_v = self.model.clip_dino_fusion.dino_attn_v
-                rank0_print(f"Initialized attn projectors for clip+dino fusion: {config.fusion_type}")
+            elif fusion_type == "film":
+                self.model.clip_dino_fusion = ClipDinoFiLMFusion(config.hidden_size)
+
+            if hasattr(self.model, "clip_dino_fusion"):
+                rank0_print(f"Initialized {fusion_type} module for clip+dino fusion")
                 rank0_print(f"params={sum(p.numel() for p in self.model.clip_dino_fusion.parameters())}")
         self.pretraining_tp = config.pretraining_tp
         self.vocab_size = config.vocab_size

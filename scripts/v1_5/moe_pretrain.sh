@@ -2,7 +2,7 @@
 
 export WANDB_ENTITY="uiucnlp"
 export WANDB_PROJECT="mixture-of-layers"
-export WANDB_NAME="MoL_router_choose_layers_text-cond-attn-hybrid-router_disagreement-gate_lr5e-5-pretrain"
+export WANDB_NAME="MoL_clip-dino-film_router_choose_layers_text-cond-attn-hybrid-router_disagreement-gate_lr5e-5-pretrain"
 export WANDB_MODE="online"  # ensure it uploads
 # export WANDB_DIR="/shared/nas2/jk100/MoL/scripts/v1_5/wandb" - where to store wandb logs
 
@@ -10,7 +10,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 DEEPSPEED_CONFIG="${DEEPSPEED_CONFIG:-${REPO_ROOT}/scripts/zero2.json}"
 DATA_PATH="${DATA_PATH:-/shared/nas/data/m1/sstoica2/.cache/huggingface/.cache/huggingface/datasets--Blip/blip_laion_cc_sbu_558k.json}"
 IMAGE_FOLDER="${IMAGE_FOLDER:-/shared/nas/data/m1/sstoica2/.cache/huggingface/.cache/huggingface/datasets--Blip/images}"
-OUTPUT_DIR="${OUTPUT_DIR:-${REPO_ROOT}/checkpoints/llava-v1.5-13b-moe-pretrain_5e-5_text-cond-attn-hybrid-router_pretrain_disagreement-gate}"
+OUTPUT_DIR="${OUTPUT_DIR:-${REPO_ROOT}/checkpoints/llava-v1.5-13b-moe-pretrain_5e-5_clip-dino-film_text-cond-attn-hybrid-router_pretrain_disagreement-gate}"
 MASTER_PORT="${MASTER_PORT:-29600}"
 
 deepspeed --master_port "${MASTER_PORT}" --include localhost:0,1,2,3 "${REPO_ROOT}/llava/train/train_mem_router.py" \
@@ -20,6 +20,8 @@ deepspeed --master_port "${MASTER_PORT}" --include localhost:0,1,2,3 "${REPO_ROO
     --data_path "${DATA_PATH}" \
     --image_folder "${IMAGE_FOLDER}" \
     --vision_tower openai/clip-vit-large-patch14-336 \
+    --encoder_type clip_dino \
+    --fusion_type film \
     --mm_projector_type mlp2x_gelu \
     --tune_mm_mlp_adapter True \
     --tune_residual_scaling_coef False \
