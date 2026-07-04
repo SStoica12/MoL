@@ -83,36 +83,27 @@ class ScaledResidualEncoderLayer(nn.Module):
         **kwargs: Unpack[TransformersKwargs],
     ) -> torch.FloatTensor:
         residual = hidden_states
-        # print("===== entered ===== ")
         hidden_states = self.layer.layer_norm1(hidden_states)
-        # print("===== done with layer norm 1 ===== ")
         hidden_states, _ = self.layer.self_attn(
             hidden_states=hidden_states,
             attention_mask=attention_mask,
             **kwargs,
         )
-        # print("===== done with attention ===== ")
         if residual.device != hidden_states.device or residual.dtype != hidden_states.dtype:
             residual = residual.to(device=hidden_states.device, dtype=hidden_states.dtype)
         scaling_coef_0 = self.scaling_coef[0]
         if scaling_coef_0.device != hidden_states.device or scaling_coef_0.dtype != hidden_states.dtype:
             scaling_coef_0 = scaling_coef_0.to(device=hidden_states.device, dtype=hidden_states.dtype)
         hidden_states = residual + scaling_coef_0 * hidden_states
-        # import pdb; pdb.set_trace()
-        # print("===== done with residual scaling 1 ===== ")
         residual = hidden_states
         hidden_states = self.layer.layer_norm2(hidden_states)
-        # print("===== done with layer norm 2 ===== ")
         hidden_states = self.layer.mlp(hidden_states)
-        # print("===== done with mlp ===== ")
         if residual.device != hidden_states.device or residual.dtype != hidden_states.dtype:
             residual = residual.to(device=hidden_states.device, dtype=hidden_states.dtype)
         scaling_coef_1 = self.scaling_coef[1]
         if scaling_coef_1.device != hidden_states.device or scaling_coef_1.dtype != hidden_states.dtype:
             scaling_coef_1 = scaling_coef_1.to(device=hidden_states.device, dtype=hidden_states.dtype)
         hidden_states = residual + scaling_coef_1 * hidden_states
-        # print("===== done with residual scaling 2 ===== ")
-        # print("hidden_states.shape: ", hidden_states.shape )
         return (hidden_states, )
 
 
@@ -230,8 +221,6 @@ class CLIPVisionTower(nn.Module):
 
     # @torch.no_grad()
     def forward(self, images):
-        # pdb.set_trace()
-        # print("grad_enabled in CLIPVisionTower.forward =", torch.is_grad_enabled())
         if type(images) is list:
             image_features = []
             # x = images.to(device=self.device, dtype=self.dtype)
@@ -243,8 +232,6 @@ class CLIPVisionTower(nn.Module):
         else:
             image_forward_outs = self.vision_tower(images.to(device=self.device, dtype=self.dtype), output_hidden_states=True)
             image_features = self.feature_select(image_forward_outs).to(images.dtype)
-        # pdb.set_trace() # placed pdb here to find where the project was getting called -- press u multiple times
-        #import pdb; pdb.set_trace()
         return image_features
 
     @property
