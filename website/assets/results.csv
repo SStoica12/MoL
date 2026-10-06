@@ -1,0 +1,17 @@
+Backbone,Method,V*,GPT4V-hard,OCR,Direct attr.,Rel. pos.,MMStar,HRBench8K,HRBench4K,RealWorldQA,NaturalBench,CharXiv,Source
+Vicuna-13B + CLIP,Baseline,71.43,52.94,50.00,65.22,93.42,30.00,36.88,43.75,51.64,68.93,23.84,experiments.tex (main backbone table)
+Vicuna-13B + CLIP,MoL layer,76.89,58.82,53.33,75.65,92.11,29.53,38.00,40.62,52.35,69.71,26.25,experiments.tex (main backbone table)
+Vicuna-13B + CLIP,MoL patch,84.87,58.82,60.00,86.09,98.68,30.13,38.50,42.25,51.82,69.41,29.17,experiments.tex (main backbone table)
+Vicuna-13B + CLIP,MoL hybrid,84.03,64.71,56.67,85.22,97.37,31.07,38.62,43.88,53.14,70.36,25.56,experiments.tex (main backbone table)
+Vicuna-13B + DINOv2 w/ Txt,Baseline,65.55,76.47,40.00,67.83,69.74,28.87,32.75,35.38,50.46,68.29,22.92,experiments.tex (main backbone table)
+Vicuna-13B + DINOv2 w/ Txt,MoL layer,67.65,52.94,36.67,60.87,93.42,27.80,34.12,35.38,50.46,67.92,25.94,experiments.tex (main backbone table)
+Vicuna-13B + DINOv2 w/ Txt,MoL patch,76.05,64.71,40.00,74.78,94.74,28.47,33.37,34.88,51.02,66.03,17.71,experiments.tex (main backbone table)
+Vicuna-13B + DINOv2 w/ Txt,MoL hybrid,84.45,70.59,50.00,86.09,98.68,30.13,36.50,39.87,52.29,67.89,26.92,experiments.tex (main backbone table)
+Llama-3-8B + SigLIP,Baseline,54.62,47.06,66.67,56.52,48.68,37.73,44.00,51.12,59.87,74.75,25.05,experiments.tex (main backbone table)
+Llama-3-8B + SigLIP,MoL patch,52.52,41.18,43.33,60.00,47.37,37.07,40.00,48.88,58.92,75.02,26.16,experiments.tex (main backbone table)
+Llama-3-8B + SigLIP,MoL hybrid,63.03,47.06,76.67,70.43,50.00,33.40,42.13,45.00,45.62,72.05,26.82,experiments.tex (main backbone table)
+Phi-1.5-1.3B + SigLIP,Baseline,42.01,23.52,26.66,35.65,61.84,34.93,32.00,36.50,34.93,67.31,4.07,experiments.tex (main backbone table)
+Phi-1.5-1.3B + SigLIP,MoL patch,39.92,29.41,50.00,28.70,55.26,33.60,30.63,33.12,38.82,60.86,19.65,experiments.tex (main backbone table)
+Phi-1.5-1.3B + SigLIP,MoL hybrid,50.84,23.52,43.33,42.60,72.36,34.93,32.00,37.25,39.74,68.00,20.46,experiments.tex (main backbone table)
+Multi-encoder · Vicuna-13B,Interleaved-MoF,82.35,58.82,53.33,82.61,98.68,31.87,35.75,44.12,57.77,67.26,26.73,multi_encoder_table.tex
+Multi-encoder · Vicuna-13B,MoL hybrid,90.34,82.35,66.67,92.17,98.68,32.00,37.62,43.50,52.55,69.72,31.13,multi_encoder_table.tex

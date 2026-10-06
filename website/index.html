@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f6f5ef">
+  <title>Mixture of Layers — Dynamic Layer Routing for Visual Reasoning</title>
+  <meta name="description" content="Let the question choose the visual representation. Mixture of Layers dynamically routes through vision encoder layers for fine-grained visual reasoning.">
+  <meta property="og:title" content="Mixture of Layers">
+  <meta property="og:description" content="Dynamic Layer Routing for Visual Reasoning. Explore the method, results, and what different vision layers see.">
+  <meta property="og:type" content="website">
+  <meta property="og:image" content="assets/social-preview.png">
+  <meta name="twitter:card" content="summary_large_image">
+  <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="styles.css">
+  <script src="results-data.js" defer></script>
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="site-header">
+    <a class="brand" href="#" aria-label="Mixture of Layers home"><svg viewBox="0 0 32 32" aria-hidden="true"><path d="m3 10 13-7 13 7-13 7Z"/><path d="m3 16 13 7 13-7M3 22l13 7 13-7"/></svg><span>MoL<span class="brand-dot">.</span></span></a>
+    <nav aria-label="Main navigation"><a href="#motivation">Why layers?</a><a href="#method">Method</a><a href="#results">Results</a><a href="#insights">Insights</a></nav>
+    <a class="header-paper" href="assets/mixture-of-layers.pdf">Read the paper <span aria-hidden="true">↗</span></a>
+  </header>
+  <main id="main">
+    <section class="hero wrap" aria-labelledby="hero-title">
+      <div class="hero-copy">
+        <p class="eyebrow"><span class="status-dot"></span> A closer look at visual reasoning</p>
+        <h1 id="hero-title">Mixture<br>of <em>Layers.</em></h1>
+        <p class="paper-subtitle">Dynamic Layer Routing<br>for Visual Reasoning</p>
+        <p class="hero-intro">The details are already there.<br>Let the question decide where to look.</p>
+        <div class="hero-actions"><a class="button primary" href="assets/mixture-of-layers.pdf">Read the paper <span aria-hidden="true">↗</span></a><a class="button secondary" href="#method">Explore the method <span aria-hidden="true">↓</span></a></div>
+      </div>
+      <div class="hero-visual">
+        <div class="visual-heading"><span>INSIDE THE VISION ENCODER</span><span class="mono">01 — L</span></div>
+        <svg class="layer-art" viewBox="0 0 590 440" role="img" aria-labelledby="layer-title layer-desc">
+          <title id="layer-title">One encoder. Many ways of seeing.</title><desc id="layer-desc">An illustrative stack of visual representations. A text-guided router selects intermediate layers and combines them into a query-relevant representation.</desc>
+          <defs>
+            <pattern id="patch-grid" width="31" height="31" patternUnits="userSpaceOnUse" patternTransform="matrix(1 .35 -1 .35 290 0)"><path d="M31 0H0V31" fill="none" stroke="#246d64" stroke-opacity=".24"/></pattern>
+            <linearGradient id="layer-fill" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#c4ded1"/><stop offset="1" stop-color="#e6eee2"/></linearGradient>
+          </defs>
+          <g class="stack-planes" stroke-linejoin="round">
+            <path class="plane ghost" d="m104 310 184-66 188 66-184 68Z"/>
+            <g class="plane-selected"><path class="plane" d="m104 266 184-66 188 66-184 68Z"/><path d="m104 266 184-66 188 66-184 68Z" fill="url(#patch-grid)"/></g>
+            <path class="plane ghost" d="m104 221 184-66 188 66-184 68Z"/>
+            <g class="plane-selected"><path class="plane" d="m104 176 184-66 188 66-184 68Z"/><path d="m104 176 184-66 188 66-184 68Z" fill="url(#patch-grid)"/></g>
+            <path class="plane ghost" d="m104 132 184-66 188 66-184 68Z"/>
+            <path class="plane top-plane" d="m104 88 184-66 188 66-184 68Z"/>
+            <path d="m104 88 184-66 188 66-184 68Z" fill="url(#patch-grid)"/>
+            <path d="m258 90 31-11 32 11-31 11Z" fill="#e18157"/><path d="m289 101 31-11 32 11-31 11Z" fill="#e18157" opacity=".55"/>
+          </g>
+          <g fill="none" stroke="#167466" stroke-width="1.5"><path d="M476 176h35v90h-35"/><path d="M511 221h33v132H338" stroke-dasharray="4 5"/><path d="M52 149v117h52" stroke-dasharray="4 5"/></g>
+          <g fill="#167466"><circle cx="476" cy="176" r="4"/><circle cx="476" cy="266" r="4"/><circle cx="338" cy="353" r="4"/></g>
+          <g font-family="Arial, sans-serif" font-size="11" fill="#636a63"><text x="17" y="92">LOCAL</text><text x="17" y="106">DETAILS</text><text x="16" y="314">SEMANTIC</text><text x="16" y="328">CONTEXT</text><text x="482" y="154" fill="#167466">SELECT</text><text x="418" y="376">WEIGHTED MIXTURE</text></g>
+          <rect x="110" y="335" width="226" height="38" rx="7" fill="#173f38"/><text x="223" y="359" fill="#fff" text-anchor="middle" font-family="Arial, sans-serif" font-size="13">Instruction-conditioned router</text>
+          <path d="M223 407v-28" stroke="#173f38" stroke-width="1.5"/><text x="223" y="428" text-anchor="middle" font-family="Georgia, serif" font-style="italic" font-size="17" fill="#33433b">“What does the small sign say?”</text>
+        </svg>
+        <div class="visual-footer"><span><i class="legend-dot"></i> Query-relevant layers</span><span>Same visual token budget <span aria-hidden="true">↗</span></span></div>
+      </div>
+    </section>
+    <div class="authors wrap">
+      <p>Jeonghwan Kim<sup>1*</sup><span>·</span>Sofia Stoica<sup>1*</sup><span>·</span>Jiwan Chung<sup>2</sup><span>·</span>Ansel Blume<sup>1</sup><br>Hyeonjeong Ha<sup>1</sup><span>·</span>Zhenhailong Wang<sup>1</sup><span>·</span>Xin Luna Dong<sup>3</sup><span>·</span>Heng Ji<sup>1</sup></p>
+      <p class="affiliations"><span><sup>1</sup> University of Illinois Urbana-Champaign</span><span><sup>2</sup> Yonsei University</span><span><sup>3</sup> Meta Reality Labs</span></p>
+      <small>* Equal contribution · Research manuscript</small>
+    </div>
+    <div class="stat-strip wrap" aria-label="Selected paper results">
+      <div><strong>+18.90<span> pp</span></strong><p>V* accuracy over baseline</p><small>Vicuna-13B · DINOv2 w/ Txt · hybrid</small></div>
+      <div><strong>90.34<span>%</span></strong><p>V* with two vision encoders</p><small>Vicuna-13B · CLIP + DINOv2 w/ Txt</small></div>
+      <div><strong>0<span> extra tokens</span></strong><p>More depth, same sequence length</p><small>Routing preserves the visual token count</small></div>
+    </div>
+
+    <section class="section wrap motivation" id="motivation">
+      <div class="section-intro"><p class="eyebrow">01 / Motivation</p><h2>A single layer<br>can miss the <em>point.</em></h2></div>
+      <div class="motivation-body"><p class="lead">Recognizing a scene isn’t the same as reading a tiny sign inside it.</p><p>Vision encoders represent an image at many depths: from localized visual details to broader semantic context. Yet many multimodal models read only the final or penultimate layer, or combine a fixed set of layers for every question.</p><p><strong>Mixture of Layers makes that choice adaptive.</strong> A text-conditioned router selects and combines intermediate representations, giving the language model visual features that better match the question.</p>
+        <div class="comparison"><div><span class="mini-label">FIXED REPRESENTATIONS</span><p>Every question<br><span aria-hidden="true">↓</span><br>The same visual layer</p></div><div class="comparison-mol"><span class="mini-label">MIXTURE OF LAYERS</span><p>A specific question<br><span aria-hidden="true">↓</span><br>A relevant mix of layers</p></div></div>
+      </div>
+    </section>
+
+    <section class="method-section" id="method">
+      <div class="wrap section">
+        <div class="section-heading"><div><p class="eyebrow">02 / The method</p><h2>Let the question<br>choose the <em>depth.</em></h2></div><p>One pre-trained encoder. A family of visual representations. Three ways to route between them.</p></div>
+        <div class="routing-lab">
+          <div class="lab-top"><span class="mini-label">EXPLORE THE ROUTER</span><span class="demo-label">Conceptual illustration · not model outputs</span></div>
+          <div class="route-tabs" role="group" aria-label="Routing variant"><button type="button" data-router="layer" aria-pressed="false">01 <span>Layer</span></button><button type="button" data-router="patch" aria-pressed="false">02 <span>Patch</span></button><button type="button" data-router="hybrid" aria-pressed="true">03 <span>Hybrid</span></button></div>
+          <div class="lab-body">
+            <div class="route-illustration" id="route-illustration" aria-hidden="true"></div>
+            <div class="route-description" aria-live="polite"><span class="mini-label" id="router-tag">GLOBAL + LOCAL + RESERVE</span><h3 id="router-title">The detail and the bigger picture.</h3><p id="router-copy">Combine image-level and patch-level routing with a weighted product of experts. A learned gate uses their disagreement to blend in a stable reserve layer.</p><div class="formula" id="router-formula">routed patch = (1 − γ) · selected layers + γ · reserve</div><p class="route-note" id="router-note">The reserve is the final or penultimate representation used by the original backbone.</p></div>
+          </div>
+        </div>
+        <div class="method-steps"><div><span>01</span><h3>Encode</h3><p>Extract intermediate vision features and an aligned text-query embedding.</p></div><div><span>02</span><h3>Route</h3><p>Score candidate layers against the question and select the top-k representations.</p></div><div><span>03</span><h3>Fuse & reason</h3><p>Mix the selected features, project them into the language space, and answer.</p></div></div>
+        <figure class="paper-figure"><a href="assets/main_figure.webp" data-lightbox><img src="assets/main_figure.webp" width="2400" height="940" loading="lazy" alt="Full MoL architecture: the image and text encoders feed layer, patch, or hybrid routers, followed by aggregation, a vision-language connector, and the language model."></a><figcaption><span>THE FULL ARCHITECTURE</span> Three routing variants, one shared idea: query-adaptive access to intermediate visual features. <a href="assets/main_figure.webp" data-lightbox>Expand figure ↗</a></figcaption></figure>
+      </div>
+    </section>
+
+    <section class="section wrap" id="results">
+      <div class="section-heading"><div><p class="eyebrow">03 / Experiments</p><h2>Small details.<br><em>Measurable</em> gains.</h2></div><p>Evaluated across seven fine-grained visual reasoning benchmarks, three language backbones, and multiple vision encoders.</p></div>
+      <div class="results-controls"><label for="backbone">Explore a backbone</label><select id="backbone"><option value="clip">Vicuna-13B + CLIP</option><option value="dinov2">Vicuna-13B + DINOv2 w/ Txt</option><option value="llama">Llama-3-8B + SigLIP</option><option value="phi">Phi-1.5-1.3B + SigLIP</option><option value="multi">Multi-encoder · Vicuna-13B</option></select><a class="text-link" href="assets/results.csv" download>Download all scores ↓</a></div>
+      <div class="results-visual"><div class="chart-heading"><div><span class="mini-label">V* BENCHMARK</span><h3 id="chart-title">Accuracy, with a closer look.</h3></div><span class="chart-unit">Accuracy (%) · higher is better</span></div><div id="results-chart" class="results-chart" aria-label="V* accuracy comparison"></div><p id="result-takeaway" class="result-takeaway" aria-live="polite"></p></div>
+      <div class="table-scroll" tabindex="0" role="region" aria-label="Benchmark accuracy table; scroll horizontally for all scores"><table id="results-table"><caption id="results-caption">Fine-grained benchmark accuracy (%)</caption><thead></thead><tbody></tbody></table></div>
+      <p class="data-note" id="results-note">Scores from the manuscript’s main backbone comparison. Deltas are percentage points, calculated from the displayed scores. Results vary by benchmark and backbone.</p>
+      <noscript><p>The interactive comparison requires JavaScript. <a href="assets/results.csv">Download every benchmark score as CSV</a> or <a href="assets/mixture-of-layers.pdf">read the full results in the paper</a>.</p></noscript>
+      <div class="multi-feature"><div><span class="eyebrow">Across encoders, too</span><h3>Route within.<br>Then combine.</h3><p>Apply hybrid routing independently to CLIP and DINOv2 w/ Txt, upsample the DINOv2 stream, and fuse the projected features into <strong>576 visual tokens</strong>.</p><p class="small">Against Interleaved-MoF, this full-system comparison improves V* by 7.99 points. HRBench4K and RealWorldQA decrease; encoder and fusion differences mean this is not a routing-only ablation.</p><button type="button" class="text-link" id="show-multi">Explore the multi-encoder results <span aria-hidden="true">↗</span></button></div><div class="multi-score"><div><span>INTERLEAVED-MOF</span><strong>82.35</strong></div><span class="score-arrow" aria-hidden="true">→</span><div><span>MoL HYBRID</span><strong>90.34</strong></div><p>V* accuracy (%) · Vicuna-13B backbone</p></div></div>
+    </section>
+
+    <section class="insights-section" id="insights"><div class="wrap section">
+      <div class="section-heading"><div><p class="eyebrow">04 / Findings & insights</p><h2>What the layers<br><em>tell us.</em></h2></div><p>Routing behavior, receptive fields, and ablations help explain when adaptive visual representations are useful.</p></div>
+      <div class="insight-row"><div class="insight-index">01</div><div><h3>Different routers use different depths.</h3><p>In the reported CLIP analysis, image-level routing emphasizes early, detail-preserving layers. Patch-level routing places more mass on later, contextualized features. Hybrid routing balances these preferences.</p></div><div class="depth-key" aria-label="Schematic depth preference"><div><span>Layer</span><i class="depth-early"></i></div><div><span>Patch</span><i class="depth-late"></i></div><div><span>Hybrid</span><i class="depth-mixed"></i></div><p>Early ← encoder depth → Late</p><small>Qualitative summary</small></div></div>
+      <div class="figure-controls sampling-controls" role="group" aria-label="Routing distribution encoder"><button type="button" data-sampling="clip" aria-pressed="true">CLIP</button><button type="button" data-sampling="dinov2" aria-pressed="false">DINOv2</button><span>Measured distributions from the paper</span></div>
+      <figure class="paper-figure routing-figure"><a href="assets/layer_sampling_by_category.webp" id="sampling-link" data-lightbox><img id="sampling-image" src="assets/layer_sampling_by_category.webp" width="2400" height="958" loading="lazy" alt="Measured CLIP routing probabilities across layers for V*, MMStar, and GQA categories, with receptive-field backgrounds and top-k selection markers."></a><figcaption><span>MEASURED ROUTING BEHAVIOR</span> Curves show average normalized routing probabilities. Lighter backgrounds indicate more localized receptive fields. <a href="assets/layer_sampling_by_category.webp" id="sampling-expand" data-lightbox>Expand figure ↗</a></figcaption></figure>
+      <div class="insights-pair"><article><span class="insight-index">02</span><h3>The question is part of the representation.</h3><p>Text-conditioned hybrid routing scores <strong>84.03%</strong> on V*, compared with <strong>77.31%</strong> for image-only routing in the text-encoder ablation. Visual evidence becomes more useful when the model knows what to look for.</p><div class="mini-bars" aria-label="Image-only 77.31%; text-conditioned hybrid 84.03%"><div><span>Image-only</span><i style="--score:77.31%"></i><b>77.31</b></div><div><span>Text-conditioned</span><i style="--score:84.03%"></i><b>84.03</b></div></div></article><article><span class="insight-index">03</span><h3>A stable fallback matters.</h3><p>Removing the reserve layer reduces accuracy across all five reported reserve-ablation benchmarks. The largest drop is <strong>5.13 points on HRBench4K</strong> (43.88 → 38.75).</p><div class="reserve-callout"><strong>−3.00 to −5.13 <span>pp</span></strong><span>Without the reserve layer · reported ablation</span></div></article></div>
+      <div class="insight-row final-insight"><span class="insight-index">04</span><div><h3>More layers isn’t always better.</h3><p>Small selections can be enough. In the k ablation, hybrid routing achieves 84.03 on V* at k = 1, versus 76.89 at k = 2 and 67.65 at k = 4. The best k depends on the task and router.</p></div><div class="k-scores"><div><span>k = 1</span><strong>84.03</strong></div><div><span>k = 2</span><strong>76.89</strong></div><div><span>k = 4</span><strong>67.65</strong></div><small>V* accuracy (%) · hybrid k ablation</small></div></div>
+    </div></section>
+
+    <section class="section wrap evidence-section" id="visual-evidence"><div class="section-heading"><div><p class="eyebrow">05 / A closer look</p><h2>Finding the evidence.<br><em>Layer by layer.</em></h2></div><p>Selected-layer self-attention maps highlight text, subtle attributes, and spatial relationships in the paper’s qualitative examples.</p></div>
+      <div class="figure-controls" role="group" aria-label="Attention map encoder"><button type="button" data-attention="clip" aria-pressed="true">CLIP</button><button type="button" data-attention="dinov2" aria-pressed="false">DINOv2</button><span>Click the figure to inspect it</span></div>
+      <figure class="paper-figure attention-figure"><a href="assets/case_study_attention_map.webp" id="attention-link" data-lightbox><img src="assets/case_study_attention_map.webp" id="attention-image" width="2400" height="765" loading="lazy" alt="CLIP selected-layer self-attention examples: a clock character, a blue bench relative to a green door, a pink shirt, a leasing-office sign, and relative mask positions."></a><figcaption id="attention-caption"><span>QUALITATIVE EVIDENCE · CLIP</span> Self-attention maps from selected vision layers. These visualizations illustrate attention patterns; they do not by themselves establish a causal explanation.</figcaption></figure>
+      <div class="takeaway"><span class="mini-label">THE TAKEAWAY</span><p>Better visual reasoning can start with<br><em>choosing the right representation.</em></p><span>Adaptive depth is complementary to richer inputs and multiple encoders.</span></div>
+    </section>
+
+    <section class="citation-section wrap" id="citation"><div><p class="eyebrow">Build on this work</p><h2>A new perspective<br>on visual <em>depth.</em></h2><div class="hero-actions"><a class="button primary" href="assets/mixture-of-layers.pdf">Paper PDF ↗</a><a class="button secondary" href="https://github.com/SStoica12/MoL">Repository · private ↗</a></div><p class="small">BibTeX for the current research manuscript. Code repository currently requires access.</p></div><div class="citation-box"><div><span class="mini-label">CITATION</span><button type="button" id="copy-citation">Copy BibTeX <span aria-hidden="true">⧉</span></button></div><pre id="bibtex">@misc{kim2026mixtureoflayers,
+  title = {Mixture of Layers: Dynamic Layer
+           Routing for Visual Reasoning},
+  author = {Kim, Jeonghwan and Stoica, Sofia and
+    Chung, Jiwan and Blume, Ansel and
+    Ha, Hyeonjeong and Wang, Zhenhailong and
+    Dong, Xin Luna and Ji, Heng},
+  year = {2026},
+  note = {Research manuscript}
+}</pre><span id="copy-status" class="sr-only" role="status"></span></div></section>
+  </main>
+  <footer class="wrap"><a class="brand" href="#">MoL<span class="brand-dot">.</span></a><span>Mixture of Layers · Dynamic Layer Routing for Visual Reasoning</span><a href="#main">Back to top ↑</a></footer>
+  <dialog id="figure-dialog" aria-label="Expanded paper figure"><div class="dialog-toolbar"><span>Paper figure · scroll to inspect</span><button type="button" id="close-figure" aria-label="Close expanded figure">Close ×</button></div><div class="dialog-image-wrap"><img id="dialog-image" width="2400" height="940" alt="Expanded paper figure"></div></dialog>
+</body>
+</html>
