@@ -45,7 +45,7 @@ The repository workflow `.github/workflows/project-website.yml` uploads **only `
 
 A repository administrator must first set **Settings → Pages → Build and deployment → Source → GitHub Actions**. The deployment environment must permit the selected branch. Then merge the website branch to the default branch or run the workflow there.
 
-For `SStoica12/MoL`, the standard URL is `https://sstoica12.github.io/MoL/`. The exact requested URL `https://mol.github.io/` requires control of the GitHub account/organization `mol` and its repository `mol/mol.github.io`. A `CNAME` file cannot claim another account’s `github.io` address. To use that repository, retain the same `website/` directory and workflow there. Confirm the intended destination before publishing.
+The confirmed publishing destination is `SStoica12/MoL`, at `https://sstoica12.github.io/MoL/`. The canonical URL and social preview metadata use this address. Publishing requires an administrator to enable Pages for this private repository; changing the repository visibility is not part of this setup.
 
 See [GitHub’s Pages creation guide](https://docs.github.com/en/pages/getting-started-with-github-pages/creating-a-github-pages-site) and [custom workflow guide](https://docs.github.com/en/pages/getting-started-with-github-pages/using-custom-workflows-with-github-pages).
 
