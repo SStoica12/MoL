@@ -194,13 +194,14 @@ def _apply_router_runtime_settings(router, config, top_k):
     return router
 
 
-def _build_router_from_config(model, config):
+def _build_router_from_config(model, config, num_image_tokens=None):
     vision_tower = model.get_model().get_vision_tower()
     if vision_tower is None:
         raise ValueError("Router checkpoint requires a vision tower to reconstruct the router.")
 
     hidden_size = vision_tower.hidden_size
-    num_image_tokens = vision_tower.num_patches + 1
+    if num_image_tokens is None:
+        num_image_tokens = vision_tower.num_patches + 1
     router_weights = torch.zeros(
         (num_image_tokens, hidden_size),
         dtype=model.lm_head.weight.dtype,

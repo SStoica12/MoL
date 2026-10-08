@@ -20,6 +20,7 @@ import shutil
 from transformers import AutoTokenizer, AutoModelForCausalLM, AutoConfig, BitsAndBytesConfig
 import torch
 from llava.model import *
+from llava.model.phi_builder import is_phi_config, load_phi_model
 from llava.constants import DEFAULT_IMAGE_PATCH_TOKEN, DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN
 
 def rank0_print(*args):
@@ -183,7 +184,7 @@ def load_pretrained_model_router_not_fine_tuned(model_path, model_base, model_na
                                 confidence_gate_slope,
                                 load_8bit=False, load_4bit=False,
                                 device_map="auto", device="cuda",
-                                use_flash_attn=False, num_layers_to_choose=1,
+                                use_flash_attn=False, num_layers_to_choose=None,
                                 router_alpha=0.01, encoder_type ="dinov2_txt",
                                 fusion_type= "attn",
                                 hybrid_reserve_mode="local_gate",
@@ -214,6 +215,13 @@ def load_pretrained_model_router_not_fine_tuned(model_path, model_base, model_na
     reserve_layer = kwargs.pop('reserve_layer', None) # this is only used for router, not needed for model loading and would cause error if we pass it in
     rank0_print("\n model_name : ", model_name)
     config_probe = _load_config_if_available(model_path)
+    if is_phi_config(config_probe) and _is_multimodal_checkpoint(model_path, model_name, config_probe):
+        return load_phi_model(
+            model_path, model_base, config_probe, device=device, model_kwargs=kwargs,
+            num_layers_to_choose=num_layers_to_choose,
+        )
+    if num_layers_to_choose is None:
+        num_layers_to_choose = 1
     is_multimodal = _is_multimodal_checkpoint(model_path, model_name, config_probe)
     is_lora_checkpoint = _is_lora_checkpoint(model_path, model_name)
     non_lora_trainables = None
@@ -546,7 +554,7 @@ def load_pretrained_model_router(model_path, model_base, model_name,
                                 confidence_gate_slope,
                                 load_8bit=False, load_4bit=False,
                                 device_map="auto", device="cuda",
-                                use_flash_attn=False, num_layers_to_choose=1,
+                                use_flash_attn=False, num_layers_to_choose=None,
                                 router_alpha=0.01, encoder_type ="dinov2_txt",
                                 fusion_type= "attn",
                                 hybrid_reserve_mode="local_gate",
@@ -576,6 +584,13 @@ def load_pretrained_model_router(model_path, model_base, model_name,
     reserve_layer = kwargs.pop('reserve_layer', None) # this is only used for router, not needed for model loading and would cause error if we pass it in
     rank0_print("\n model_name : ", model_name)
     config_probe = _load_config_if_available(model_path)
+    if is_phi_config(config_probe) and _is_multimodal_checkpoint(model_path, model_name, config_probe):
+        return load_phi_model(
+            model_path, model_base, config_probe, device=device, model_kwargs=kwargs,
+            num_layers_to_choose=num_layers_to_choose,
+        )
+    if num_layers_to_choose is None:
+        num_layers_to_choose = 1
     is_multimodal = _is_multimodal_checkpoint(model_path, model_name, config_probe)
     is_lora_checkpoint = _is_lora_checkpoint(model_path, model_name)
     non_lora_trainables = None
@@ -989,6 +1004,10 @@ def load_pretrained_model(model_path, model_base, model_name, encoder_type ="din
     if use_flash_attn:
         kwargs['attn_implementation'] = 'flash_attention_2'
     config_probe = _load_config_if_available(model_path)
+    if is_phi_config(config_probe) and _is_multimodal_checkpoint(model_path, model_name, config_probe):
+        return load_phi_model(
+            model_path, model_base, config_probe, device=device, model_kwargs=kwargs,
+        )
     is_multimodal = _is_multimodal_checkpoint(model_path, model_name, config_probe)
     is_lora_checkpoint = _is_lora_checkpoint(model_path, model_name)
     if is_multimodal:

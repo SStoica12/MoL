@@ -43,8 +43,6 @@ def parser():
 
 def command(args):
     profile = PROFILES[args.profile]
-    if not profile["runtime_supported"]:
-        raise ValueError("Phi dispatch is not connected in this snapshot; see docs/COMPATIBILITY.md.")
     if min(args.gpus, args.batch_size, args.gradient_accumulation, args.epochs) <= 0:
         raise ValueError("GPU count, batch size, accumulation, and epochs must be positive.")
     if args.k is not None and args.k <= 0:
@@ -60,7 +58,10 @@ def command(args):
     lr = args.learning_rate if args.learning_rate is not None else (1e-3 if pretrain else profile["finetune_lr"])
     router_lr = args.router_lr if args.router_lr is not None else (profile["pretrain_router_lr"] if pretrain else lr)
     options.update(
-        version="plain" if pretrain else ("llama" if profile["model_type"] == "llama3-8b" else "v1"),
+        version="plain" if pretrain else (
+            "bunny" if profile["model_type"] == "phi-1.5" else
+            "llama" if profile["model_type"] == "llama3-8b" else "v1"
+        ),
         data_path=args.data_path.resolve(), image_folder=args.image_folder.resolve(),
         output_dir=args.output_dir.resolve(),
         deepspeed=ROOT / "scripts" / ("zero2.json" if pretrain or profile["lora_enable"] else "zero3.json"),

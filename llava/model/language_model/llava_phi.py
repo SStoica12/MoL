@@ -24,7 +24,11 @@ from transformers.generation.utils import GenerateOutput
 from transformers.modeling_outputs import CausalLMOutputWithPast
 
 from ..llava_arch import LlavaMetaModel, LlavaMetaForCausalLM
-from .llava_llama import _build_router_from_config, _config_requires_router
+from .llava_llama import (
+    RouterLlavaLlamaForCausalLM,
+    _build_router_from_config,
+    _config_requires_router,
+)
 
 
 class LlavaPhiModel(LlavaMetaModel, PhiModel):
@@ -38,6 +42,9 @@ class LlavaPhiForCausalLM(PhiForCausalLM, LlavaMetaForCausalLM):
     config_class = PhiConfig
 
     def __init__(self, config):
+        config.encoder_type = getattr(config, "encoder_type", "siglip")
+        if config.encoder_type != "siglip":
+            raise ValueError("The Phi model supports the single SigLIP encoder setup.")
         super(PhiForCausalLM, self).__init__(config)
         self.model = LlavaPhiModel(config)
         self.vocab_size = config.vocab_size
@@ -60,8 +67,11 @@ class LlavaPhiForCausalLM(PhiForCausalLM, LlavaMetaForCausalLM):
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         images: Optional[torch.FloatTensor] = None,
+        dino_images: Optional[torch.FloatTensor] = None,
         image_sizes: Optional[List[List[int]]] = None,
         clip_texts: Optional[List[str]] = None,
+        encoder_type: Optional[str] = None,
+        fusion_type=None,
         return_dict: Optional[bool] = None,
         cache_position: Optional[torch.LongTensor] = None,
         num_logits_to_keep: int = 0,
@@ -75,15 +85,17 @@ class LlavaPhiForCausalLM(PhiForCausalLM, LlavaMetaForCausalLM):
                 past_key_values,
                 inputs_embeds,
                 labels,
-            ) = self.prepare_inputs_labels_for_multimodal(
+            ) = self.prepare_inputs_labels_for_multimodal_withdino(
                 input_ids=input_ids,
                 position_ids=position_ids,
                 attention_mask=attention_mask,
                 past_key_values=past_key_values,
                 labels=labels,
                 images=images,
-                image_sizes=image_sizes,
+                dino_images=dino_images,
+                image_sizes_clip=image_sizes,
                 clip_texts=clip_texts,
+                encoder_type=encoder_type or self.config.encoder_type,
             )
 
         super_forward = super().forward
@@ -122,12 +134,17 @@ class LlavaPhiForCausalLM(PhiForCausalLM, LlavaMetaForCausalLM):
         self,
         inputs: Optional[torch.Tensor] = None,
         images: Optional[torch.Tensor] = None,
+        dino_images: Optional[torch.Tensor] = None,
         image_sizes: Optional[torch.Tensor] = None,
+        encoder_type: Optional[str] = None,
+        prompts: Optional[List[str]] = None,
         **kwargs,
     ) -> Union[GenerateOutput, torch.LongTensor]:
         position_ids = kwargs.pop("position_ids", None)
         attention_mask = kwargs.pop("attention_mask", None)
         clip_texts = kwargs.pop("clip_texts", None)
+        if prompts is not None:
+            clip_texts = prompts
         if "inputs_embeds" in kwargs:
             raise NotImplementedError("`inputs_embeds` is not supported")
 
@@ -139,15 +156,17 @@ class LlavaPhiForCausalLM(PhiForCausalLM, LlavaMetaForCausalLM):
                 _,
                 inputs_embeds,
                 _,
-            ) = self.prepare_inputs_labels_for_multimodal(
+            ) = self.prepare_inputs_labels_for_multimodal_withdino(
                 inputs,
                 position_ids,
                 attention_mask,
                 None,
                 None,
                 images,
-                image_sizes=image_sizes,
+                dino_images=dino_images,
+                image_sizes_clip=image_sizes,
                 clip_texts=clip_texts,
+                encoder_type=encoder_type or self.config.encoder_type,
             )
         else:
             inputs_embeds = self.get_model().embed_tokens(inputs)
@@ -208,90 +227,44 @@ class LlavaPhiForCausalLM(PhiForCausalLM, LlavaMetaForCausalLM):
 
 
 class RouterLlavaPhiForCausalLM(LlavaPhiForCausalLM):
-    def __init__(self, config, router=None, load_balance_alpha=10**-2):
+    def __init__(self, config, router=None, load_balance_alpha=10**-2, initialize_router=True):
         super().__init__(config)
-        if router is None and _config_requires_router(config):
-            router = _build_router_from_config(self, config)
-        self.router = router
+        self.router_clip = router
+        if router is None and initialize_router and _config_requires_router(config):
+            self.initialize_router()
         self.load_balance_alpha = load_balance_alpha
+        self.encoder_type = config.encoder_type
+        self.text_embeds = None
+        self.text_attention_mask = None
 
-    def get_model(self):
-        return self.model
+    def initialize_router(self):
+        # SigLIP has no CLS token. Released Phi adapters have 27*27 positions.
+        self.router_clip = _build_router_from_config(
+            self, self.config, num_image_tokens=self.get_vision_tower().num_patches
+        ).to(device=self.lm_head.weight.device, dtype=self.lm_head.weight.dtype)
 
-    def encode_images(self, images, text_embeds=None, text_attention_mask=None):
-        if self.router is None:
-            return super().encode_images(
-                images,
-                text_embeds=text_embeds,
-                text_attention_mask=text_attention_mask,
-            )
+    @classmethod
+    def _load_pretrained_model(cls, model, *args, **kwargs):
+        # Transformers 4.37 rewrites every "beta" in checkpoint keys to "bias".
+        # Match that spelling during loading, then restore our canonical module
+        # name. This preserves the trained hybrid gate in full-model exports.
+        router = getattr(model, "router_clip", None)
+        gate = getattr(router, "hybrid_beta_gate", None)
+        if gate is None:
+            return super()._load_pretrained_model(model, *args, **kwargs)
+        del router.hybrid_beta_gate
+        router.add_module("hybrid_bias_gate", gate)
+        try:
+            return super()._load_pretrained_model(model, *args, **kwargs)
+        finally:
+            gate = router.hybrid_bias_gate
+            del router.hybrid_bias_gate
+            router.add_module("hybrid_beta_gate", gate)
 
-        vision_tower = self.get_model().get_vision_tower().vision_tower
-        device = vision_tower.device
-        dtype = vision_tower.dtype
-        if type(images) is list:
-            image_features = []
-            for image in images:
-                image_forward_outs = vision_tower(
-                    image.to(device=device, dtype=dtype).unsqueeze(0),
-                    output_hidden_states=True,
-                )
-        else:
-            image_forward_outs = vision_tower(
-                images.to(device=device, dtype=dtype),
-                output_hidden_states=True,
-            )
-
-        hidden_states = torch.stack(list(image_forward_outs.hidden_states))
-        assert hidden_states.ndim == 4
-        image_features = self.router(
-            hidden_states[1:, :, :, :],
-            text_embeds=text_embeds,
-            text_attention_mask=text_attention_mask,
-        )
-        if self.training and torch.is_grad_enabled() and not image_features.requires_grad:
-            raise RuntimeError("Router image features lost gradients during training.")
-        mm_projector = self.get_model().mm_projector
-        projector_param = next(mm_projector.parameters(), None)
-        if projector_param is not None and (
-            image_features.device != projector_param.device
-            or image_features.dtype != projector_param.dtype
-        ):
-            image_features = image_features.to(
-                device=projector_param.device,
-                dtype=projector_param.dtype,
-            )
-        image_features = mm_projector(image_features)
-        return image_features
-
-    def get_router_probs(self, hidden_states):
-        hidden_states = torch.stack(list(hidden_states))
-        router_probs = self.router.router_probs(hidden_states[1:, :, :, :])
-        return router_probs
-
-    def get_aux_loss(self, images):
-        cached_router_probs = getattr(self.router, "_latest_router_probs_for_aux", None)
-        if cached_router_probs is not None:
-            return self.router.load_balance_loss(cached_router_probs)
-
-        vision_tower = self.get_model().get_vision_tower().vision_tower
-        device = vision_tower.device
-        dtype = vision_tower.dtype
-        losses = []
-        if type(images) is list:
-            for image in images:
-                image_forward_outs = vision_tower(
-                    image.to(device=device, dtype=dtype),
-                    output_hidden_states=True,
-                )
-                router_probs = self.get_router_probs(image_forward_outs.hidden_states)
-                losses.append(self.router.load_balance_loss(router_probs))
-            loss = sum(losses) / len(losses)
-        else:
-            image_forward_outs = vision_tower(
-                images.to(device=device, dtype=dtype),
-                output_hidden_states=True,
-            )
-            router_probs = self.get_router_probs(image_forward_outs.hidden_states)
-            loss = self.router.load_balance_loss(router_probs)
-        return loss
+    # These methods depend only on the vision tower/router/projector interfaces.
+    # Sharing them keeps Phi's routing and auxiliary loss identical to the
+    # existing single-encoder implementation, without inheriting a Llama LM.
+    rank0_print = RouterLlavaLlamaForCausalLM.rank0_print
+    encode_images_withclip = RouterLlavaLlamaForCausalLM.encode_images_withclip
+    get_router_probs = RouterLlavaLlamaForCausalLM.get_router_probs
+    get_aux_loss = RouterLlavaLlamaForCausalLM.get_aux_loss

@@ -87,14 +87,19 @@ class LauncherTests(unittest.TestCase):
             cmd, _ = evaluate.commands(args)
             self.assertEqual(cmd[cmd.index('--conv-mode') + 1], 'llama')
 
-    def test_phi_does_not_fall_through_to_llama(self):
-        with self.assertRaisesRegex(ValueError, 'Phi'):
-            train.command(self.training_args('phi1_5_siglip_patch'))
+    def test_phi_uses_bunny_template_and_lora_training(self):
+        _, options = train.command(self.training_args('phi1_5_siglip_patch'))
+        self.assertEqual(options['version'], 'bunny')
+        self.assertTrue(options['lora_enable'])
+        self.assertIn('pretrain_mm_mlp_adapter', options)
         with tempfile.TemporaryDirectory() as tmp:
             folder = Path(tmp)
-            (folder / 'config.json').write_text(json.dumps({'model_type': 'llava_phi'}))
-            with self.assertRaisesRegex(ValueError, 'Phi'):
-                evaluate.commands(self.eval_args(folder))
+            (folder / 'config.json').write_text(json.dumps({'model_type': 'phi'}))
+            (folder / 'adapter_config.json').write_text(json.dumps({
+                'base_model_name_or_path': 'microsoft/phi-1_5'}))
+            cmd, _ = evaluate.commands(self.eval_args(folder))
+            self.assertEqual(cmd[cmd.index('--conv-mode') + 1], 'bunny')
+            self.assertEqual(cmd[cmd.index('--model-base') + 1], 'microsoft/phi-1_5')
 
     def test_scorer_arguments_match_existing_entrypoints(self):
         import ast

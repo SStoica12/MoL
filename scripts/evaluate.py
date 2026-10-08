@@ -39,11 +39,12 @@ def commands(args):
         cfg.get("model_type"), cfg.get("architectures"), cfg.get("_name_or_path"),
         adapter.get("base_model_name_or_path"), base,
     )).lower()
-    if "phi" in identity:
-        raise ValueError("Phi loading is not connected in this snapshot; see docs/COMPATIBILITY.md.")
     if adapter and not base:
         raise ValueError("This adapter needs --model-base or base_model_name_or_path in adapter_config.json.")
-    conv = args.conv_mode or ("llama" if "llama-3" in identity or "llama3" in identity else "vicuna_v1")
+    conv = args.conv_mode or (
+        "bunny" if "phi" in identity else
+        "llama" if "llama-3" in identity or "llama3" in identity else "vicuna_v1"
+    )
     if args.judge_model and args.benchmark != "charxiv":
         raise ValueError("--judge-model is only used for CharXiv.")
     if args.k is not None and args.k <= 0:

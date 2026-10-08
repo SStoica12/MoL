@@ -395,16 +395,21 @@ class RouterLLaVATrainer(Trainer):
 
         outputs = model(**inputs)
         loss = outputs.loss
+        # DeepSpeed/DDP do not forward custom model methods. Keep the forward
+        # wrapped, but reach Phi's router state through the underlying model.
+        aux_model = model
+        if getattr(self.model.config, "model_type", None) == "phi":
+            aux_model = self.accelerator.unwrap_model(model)
         rank0_print(f"\n ================ main loss: {loss.item():.4f}")
         if images is not None and dino_images is not None:
-            load_balance_loss = model.get_aux_loss(images, dino_images)
+            load_balance_loss = aux_model.get_aux_loss(images, dino_images)
         else:
             if dino_images is not None and images is None:
                 images = dino_images
-            load_balance_loss = model.get_aux_loss(images)
+            load_balance_loss = aux_model.get_aux_loss(images)
         rank0_print(f"------------------------ END ONE STEP ------------------------")
         self.aux_losses.append(load_balance_loss)
         self.last_aux_loss = float(load_balance_loss.detach().cpu().item())
-        loss += model.load_balance_alpha * load_balance_loss
+        loss += aux_model.load_balance_alpha * load_balance_loss
         assert torch.isnan(loss) == False, "Loss is NaN!"
         return (loss, outputs) if return_outputs else loss

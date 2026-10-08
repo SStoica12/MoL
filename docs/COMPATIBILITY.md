@@ -1,10 +1,14 @@
 # Compatibility and reproduction notes
 
-This release packages the existing MoL implementation. Cleanup removes unused code, development artifacts, and debugger remnants; it does not revise routing equations, encoder feature selection, fusion, losses, or checkpoint formats.
+This release packages the existing MoL implementation and integrates the native Phi backbone into training and evaluation. The integration preserves routing equations, encoder feature selection, fusion, and loss definitions; existing released adapters load without rewriting their files.
 
 ## Backbone support
 
-The active trainer and evaluation loader instantiate the Llama-based classes for Vicuna and Llama-3. They do not select the retained `RouterLlavaPhiForCausalLM` implementation for Phi. Phi also has older router integration, so simply renaming a model folder does not make it compatible. The two Phi weight repositories are published, but the release launchers reject Phi until its model dispatch/integration is implemented. This is an existing limitation, not a missing pip package.
+The trainer and evaluation loaders select Llama-based classes for Vicuna/Llama-3 and `RouterLlavaPhiForCausalLM` for Phi. Phi support covers the single-SigLIP patch and hybrid variants. It uses the same router/projector interfaces and auxiliary loss as the other single-encoder models, with Phi's native decoder, biased output head, and padded 51,200-token vocabulary.
+
+The Phi loader reads the base model from `adapter_config.json`, restores all projector/router tensors, and merges the LoRA adapter. It accepts legacy `router.*` keys and current `router_clip.*` exports, normalizes the legacy hybrid scalar shapes, and constructs the router for SigLIP's 729 patch positions. Missing multimodal tensors raise an error. Special-token IDs come from the base tokenizer; no manual checkpoint edits are needed.
+
+Phi instruction tuning uses the Bunny conversation template and masks user/system text from the language-model loss. The vision/text backbone stays frozen; the router is registered on the Phi model beneath PEFT so forward passes, optimization, and saving use the same parameters. Stage 1 saves the projector and router together in `mm_projector.bin`; stage 2 saves LoRA weights plus `non_lora_trainables.bin`.
 
 CLIP, DINOv2 with an aligned text encoder, and SigLIP implementations are retained. DINOv2 uses the `facebookresearch/dinov2` Torch Hub entry `dinov2_vitl14_reg4_dinotxt_tet1280d20h24l`; this downloads upstream code and weights on first use. Record the cached upstream revision for reproducible runs. The `vision_tower` CLIP identifier in DINO-only profiles is inherited configuration metadata; `encoder_type=dinov2_txt` selects the actual DINO tower.
 
@@ -24,7 +28,7 @@ A standard Bunny projector does not contain MoL router parameters. The current t
 
 ## Evaluation protocols
 
-The evaluator uses greedy decoding by default. The wrapper restores routing settings from the checkpoint and chooses `vicuna_v1` for Vicuna or `llama` for Llama-3 adapters. Keep the base tokenizer, conversation template, dataset split, and `k` consistent across comparisons. Generation currently runs through the existing loader with its device mapping; the wrapper does not implement distributed benchmark sharding.
+The evaluator uses greedy decoding by default. The wrapper restores routing settings from the checkpoint and chooses `vicuna_v1` for Vicuna, `llama` for Llama-3, or `bunny` for Phi. Keep the base tokenizer, conversation template, dataset split, and `k` consistent across comparisons. Generation currently runs through the existing loader with its device mapping; the wrapper does not implement distributed benchmark sharding.
 
 The included scorers preserve the repository's existing metrics and answer parsing. They are not a replacement implementation of every upstream benchmark protocol. NaturalBench reports grouped metrics as well as sample-level summaries. Historical V* runs may include extra local category folders absent from the public dataset; a fresh public download does not reconstruct those categories.
 
@@ -32,4 +36,6 @@ CharXiv reasoning requires judge grades. Without `--judge-model`, the scorer wri
 
 ## Validation scope
 
-Dependencies are pinned from historical environments. Installation and runtime imports were checked in an isolated CPU environment using Python 3.11 and the pinned PyTorch/Transformers versions; the conda recipe targets the historical Python 3.10 environment. CPU tests cover feature dimensions, numerical agreement of dual fusion with the historical implementation, gradients, checkpoint round trips, and single-encoder behavior, plus launcher contracts. These checks do not establish end-to-end GPU training, FlashAttention installation, full checkpoint loading, or paper-score reproduction on a fresh machine.
+Dependencies are pinned from historical environments. Validation used an isolated Python 3.11 environment with PyTorch 2.1.2/CUDA 12.1, Transformers 4.37.2, DeepSpeed 0.12.6, and FlashAttention 2.5.2; the conda recipe targets Python 3.10. The 18 CPU tests cover feature dimensions, agreement of dual fusion with the historical implementation, single-encoder behavior, Phi forward/backward and cached generation, LoRA gradients, assistant-only labels, wrapped auxiliary losses, checkpoint round trips, and launcher contracts.
+
+On one H100, both released Phi adapters loaded with every projector/router tensor checked against the saved weights, generated image-conditioned answers, and produced finite BF16 router/projector gradients. A synthetic example also completed Phi hybrid stage-1 pretraining and two steps of LoRA instruction tuning through the public launcher, with confirmed LoRA, router, and projector weight updates. The saved adapter then reloaded through `scripts/evaluate.py`, completing generation and scoring. These are smoke tests; full-dataset training, multi-GPU execution, and reproduction of the paper's benchmark scores were not run.

@@ -172,7 +172,7 @@
     "hf_repo": "wjdghks950/phi1_5_siglip_patch",
     "finetune_lr": 5e-05,
     "pretrain_router_lr": 5e-05,
-    "runtime_supported": false
+    "runtime_supported": true
   },
   "phi1_5_siglip_hybrid": {
     "attn_level": "hybrid",
@@ -197,7 +197,7 @@
     "hf_repo": "wjdghks950/phi1_5_siglip_hybrid",
     "finetune_lr": 0.0002,
     "pretrain_router_lr": 5e-05,
-    "runtime_supported": false
+    "runtime_supported": true
   },
   "vicuna_clip_layer": {
     "attn_level": "layer",

@@ -35,6 +35,9 @@ from llava.model import *
 from llava.mm_utils import tokenizer_image_token
 from llava.model.language_model.llava_llama import RouterLlavaLlamaForCausalLM, DoubleRouterLlavaLlamaForCausalLM
 from llava.model.language_model.llava_mpt import RouterLlavaMptForCausalLM, DoubleRouterLlavaMptForCausalLM
+from llava.model.language_model.llava_phi import RouterLlavaPhiForCausalLM
+from llava.model.phi_builder import configure_phi_tokens, is_phi_config
+from llava.train.phi_utils import preprocess_phi
 from PIL import Image
 
 
@@ -836,6 +839,8 @@ def preprocess(
     """
     if conversation_lib.default_conversation.sep_style == conversation_lib.SeparatorStyle.PLAIN:
         return preprocess_plain(sources, tokenizer)
+    if conversation_lib.default_conversation.version == "bunny":
+        return preprocess_phi(sources, tokenizer)
     if conversation_lib.default_conversation.sep_style == conversation_lib.SeparatorStyle.LLAMA_2:
         return preprocess_llama_2(sources, tokenizer, has_image=has_image)
     if conversation_lib.default_conversation.version.startswith("v1"):
@@ -1116,7 +1121,16 @@ def train(attn_implementation=None):
         config.fusion_type = model_args.fusion_type # this only matters if we have clip + dino instance
 
         config.encoder_type = model_args.encoder_type
-        if 'mpt' in model_args.model_name_or_path:
+        if is_phi_config(config):
+            model = RouterLlavaPhiForCausalLM.from_pretrained(
+                model_args.model_name_or_path,
+                config=config,
+                cache_dir=training_args.cache_dir,
+                attn_implementation=attn_implementation,
+                torch_dtype=(torch.bfloat16 if training_args.bf16 else None),
+                **bnb_model_from_pretrained_args,
+            )
+        elif 'mpt' in model_args.model_name_or_path:
             config.attn_config['attn_impl'] = training_args.mpt_attn_impl
             if ("clip" in model_args.encoder_type or "siglip" in model_args.encoder_type)  and "dino" in model_args.encoder_type:
                 model = DoubleRouterLlavaMptForCausalLM.from_pretrained(
@@ -1212,7 +1226,7 @@ def train(attn_implementation=None):
             cache_dir=training_args.cache_dir,
             model_max_length=training_args.model_max_length,
             padding_side="right",
-            use_fast=model_args.model_type == "llama3-8b",
+            use_fast=model_args.model_type == "llama3-8b" or is_phi_config(model.config),
         )
     # tokenizer is of type transformers.models.llama.tokenization_llama.LlamaTokenizer
     if model_args.version == "v0":
@@ -1238,6 +1252,8 @@ def train(attn_implementation=None):
         tokenizer.pad_token = tokenizer.eos_token
         model.config.eos_token_id = tokenizer.eos_token_id
         model.config.pad_token_id = tokenizer.pad_token_id
+    if is_phi_config(model.config):
+        configure_phi_tokens(model, tokenizer)
 
     if model_args.vision_tower is not None:
         model.get_model().initialize_vision_modules(
@@ -1251,6 +1267,10 @@ def train(attn_implementation=None):
         if ("clip" in model_args.encoder_type or "siglip" in model_args.encoder_type):
             vision_tower = model.get_vision_tower()
             vision_tower.to(dtype=torch.bfloat16 if training_args.bf16 else torch.float16, device=training_args.device)
+            if is_phi_config(model.config):
+                # The shared SigLIP wrapper exposes trainable residual scalars;
+                # the Phi recipe freezes the entire vision/text encoder.
+                vision_tower.requires_grad_(False)
         if "dino" in model_args.encoder_type:
             dino_tower = model.get_dino_vision_tower() # create seperate dino_tower when we have clip + dino instance
             dino_tower.to(dtype=torch.bfloat16 if training_args.bf16 else torch.float16, device=training_args.device)
@@ -1443,6 +1463,13 @@ def train(attn_implementation=None):
                     confidence_gate_threshold=model_args.confidence_gate_threshold,
                     confidence_gate_slope=model_args.confidence_gate_slope,
                 )
+        if is_phi_config(model.config) and training_args.lora_enable:
+            # PEFT forwards calls to the base model. Register the router there
+            # once, so forward(), optimizer groups, and adapter exports agree.
+            router = model.router_clip
+            del model.router_clip
+            model.get_base_model().router_clip = router
+
         # chooses which layers to apply the router
         if ("clip" in model_args.encoder_type or "siglip" in model_args.encoder_type):
             model.router_clip.num_layers_to_choose = model_args.num_layers_to_choose

@@ -23,7 +23,7 @@ python -m pip install flash-attn==2.5.2 --no-build-isolation
 
 For evaluation only, install `'.[eval]'` instead; FlashAttention is required by the training entry point. The principal pins are Python 3.10, PyTorch 2.1.2, Transformers 4.37.2, NumPy 1.26.4, PEFT 0.10.0, Accelerate 0.21.0, and DeepSpeed 0.12.6. The complete dependencies are in [pyproject.toml](pyproject.toml). These versions follow the historical training environments; upgrading Transformers or PyTorch independently can break the custom model classes.
 
-CPU import and regression checks are available below. They do not validate a full GPU training run or benchmark evaluation. See [compatibility notes](docs/COMPATIBILITY.md) for the remaining limitations.
+CPU regression checks are available below. Both released Phi checkpoints have also passed GPU loading, image generation, and backward checks. See [compatibility notes](docs/COMPATIBILITY.md) for validation scope and remaining limitations.
 
 ## Download checkpoints
 
@@ -37,10 +37,10 @@ All eight repositories below are public. `k` is stored as `num_layers_to_choose`
 | Vicuna-13B / DINOv2 + text | hybrid | 2 | [vicuna_dinov2_hybrid](https://huggingface.co/wjdghks950/vicuna_dinov2_hybrid) | Full model |
 | Llama-3-8B-Instruct / SigLIP | patch | 4 | [llama3-8b_siglip_patch](https://huggingface.co/wjdghks950/llama3-8b_siglip_patch) | LoRA + multimodal weights |
 | Llama-3-8B-Instruct / SigLIP | hybrid | 1 | [llama3-8b_siglip_hybrid](https://huggingface.co/wjdghks950/llama3-8b_siglip_hybrid) | LoRA + multimodal weights |
-| Phi-1.5 / SigLIP | patch | 1 | [phi1_5_siglip_patch](https://huggingface.co/wjdghks950/phi1_5_siglip_patch) | LoRA + multimodal weights; loader unavailable here |
-| Phi-1.5 / SigLIP | hybrid | 2 | [phi1_5_siglip_hybrid](https://huggingface.co/wjdghks950/phi1_5_siglip_hybrid) | LoRA + multimodal weights; loader unavailable here |
+| Phi-1.5 / SigLIP | patch | 1 | [phi1_5_siglip_patch](https://huggingface.co/wjdghks950/phi1_5_siglip_patch) | LoRA + multimodal weights |
+| Phi-1.5 / SigLIP | hybrid | 2 | [phi1_5_siglip_hybrid](https://huggingface.co/wjdghks950/phi1_5_siglip_hybrid) | LoRA + multimodal weights |
 
-**Phi checkpoints are downloadable, but this snapshot does not dispatch Phi models in its training/evaluation loaders.** The launchers reject Phi rather than load the wrong architecture. The existing Phi class is retained for future integration. No public dual-encoder or global-layer checkpoint is included in this release.
+All eight checkpoints are supported by the training/evaluation framework. Phi uses its native language-model architecture with the shared MoL router. No public dual-encoder or global-layer checkpoint is included in this release.
 
 Download a complete model directory:
 
@@ -56,7 +56,7 @@ LoRA checkpoints additionally require the base model named in `adapter_config.js
 Follow [docs/DATA.md](docs/DATA.md) for download links, extraction layout, and benchmark conversion commands.
 
 - Vicuna uses LLaVA's 558K caption alignment data and 665K instruction mixture.
-- The Bunny-based Llama-3/SigLIP setup uses Bunny pretraining data and Bunny-695K instruction data.
+- The Bunny-based Llama-3/SigLIP and Phi-1.5/SigLIP setups use Bunny pretraining data and Bunny-695K instruction data.
 - Training reads a JSON list of conversations; evaluation reads converted JSONL questions. Image paths must resolve relative to the `--image-folder` passed to the launcher.
 
 The data, checkpoints, generated predictions, and logs are excluded from source control.
@@ -94,6 +94,7 @@ Change `--profile` in **both** commands to select a variant:
 | `vicuna_dinov2_patch`, `vicuna_dinov2_hybrid` | DINOv2 with aligned text encoder; full instruction finetuning |
 | `vicuna_clip_layer`, `vicuna_dinov2_layer` | Example global-layer router configurations |
 | `llama3-8b_siglip_patch`, `llama3-8b_siglip_hybrid` | SigLIP; LoRA instruction finetuning, rank 128 / alpha 256; use Bunny data paths |
+| `phi1_5_siglip_patch`, `phi1_5_siglip_hybrid` | SigLIP; LoRA instruction finetuning, rank 128 / alpha 256; use Bunny data paths and the automatically selected `bunny` template |
 | `vicuna_clip_dinov2_hybrid` | CLIP + DINOv2, `fusion_type=concate_upsample` |
 
 For DINOv2, stage 1 saves `dino_mm_projector.bin`. CLIP/SigLIP saves `mm_projector.bin`. Dual-encoder training saves and requires **both** files; its CLIP adapter also contains the learned fusion projection. The launcher selects the appropriate files from `--pretrain-dir`.
@@ -117,7 +118,7 @@ CUDA_VISIBLE_DEVICES=0 python scripts/evaluate.py \
 
 Choose `vstar`, `mmstar`, `hrbench4k`, `hrbench8k`, `realworldqa`, `naturalbench`, or `charxiv`. Each run invokes the existing generator and scorer, writing `answers.jsonl`, `metrics.json`, and `details.jsonl` under the specified output directory. The loader restores router settings and `k` from the checkpoint config. Use `--k` only for an intentional evaluation-time override. Add `--dry-run` to inspect both commands; the downloaded checkpoint config must exist.
 
-For a Llama-3 adapter, download its complete directory and use the same command with its `--model-path`; the wrapper selects the `llama` conversation template and reads the base model from `adapter_config.json`. Vicuna uses `vicuna_v1`.
+For a Llama-3 or Phi adapter, download its complete directory and use the same command with its `--model-path`. The wrapper reads the base model from `adapter_config.json` and selects `llama` for Llama-3, `bunny` for Phi, or `vicuna_v1` for Vicuna. For example, use `hf download wjdghks950/phi1_5_siglip_hybrid --local-dir checkpoints/phi1_5_siglip_hybrid`, then evaluate with `--model-path checkpoints/phi1_5_siglip_hybrid`.
 
 CharXiv descriptive questions can be scored locally. Reasoning questions need judge grades; without them the summary is incomplete. Explicitly opt into API grading with `--judge-model YOUR_JUDGE_MODEL` and set `OPENAI_API_KEY`. This sends predictions/questions to the selected API and incurs its usage costs. Use a consistent judge and dataset split when comparing models. See [compatibility notes](docs/COMPATIBILITY.md) for evaluation protocol details.
 
@@ -134,7 +135,7 @@ CharXiv descriptive questions can be scored locally. Reasoning questions need ju
 python -m unittest discover -s tests -v
 ```
 
-The CPU tests check dual-encoder fusion, single-encoder regression behavior, adapter round trips, and launcher contracts. Full training and benchmark evaluation require models, datasets, and GPUs.
+The CPU tests check dual-encoder fusion, single-encoder behavior, Phi forward/backward and cached generation, LoRA gradients, assistant-only training labels, checkpoint round trips, and launcher contracts. Full training and benchmark evaluation require models, datasets, and GPUs.
 
 ## Citation and acknowledgments
 

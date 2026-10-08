@@ -44,7 +44,7 @@ Use `--image-folder data/train`. Both single-encoder Vicuna profiles and the dua
 
 ## Bunny training data
 
-For the Llama-3/SigLIP profiles, use [Bunny's data instructions](https://github.com/BAAI-DCAI/Bunny#train). Its pretraining set contains 2M caption-image pairs sampled from a LAION coreset; the instruction data here is Bunny-695K. The Phi data recipe is the same family, but Phi execution is unavailable in this snapshot.
+For the Llama-3/SigLIP and Phi-1.5/SigLIP profiles, use [Bunny's data instructions](https://github.com/BAAI-DCAI/Bunny#train). Its pretraining set contains 2M caption-image pairs sampled from a LAION coreset; the instruction data here is Bunny-695K. The training launcher selects the matching language model and conversation template for each profile.
 
 - [Bunny-v1_1-data](https://huggingface.co/datasets/BoyaWu10/Bunny-v1_1-data/tree/main/pretrain): pretraining annotations and archives.
 - [Bunny-v1_0-data](https://huggingface.co/datasets/BoyaWu10/Bunny-v1_0-data/tree/main): Bunny-695K annotations and image archives.
