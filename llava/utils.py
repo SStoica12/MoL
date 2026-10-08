@@ -42,7 +42,6 @@ def build_logger(logger_name, logger_filename):
     logger = logging.getLogger(logger_name)
     logger.setLevel(logging.INFO)
 
-    # Add a file handler for all loggers
     if handler is None:
         os.makedirs(LOGDIR, exist_ok=True)
         filename = os.path.join(LOGDIR, logger_filename)
@@ -75,7 +74,6 @@ class StreamToLogger(object):
         self.linebuf = ''
         for line in temp_linebuf.splitlines(True):
             # From the io.TextIOWrapper docs:
-            #   On output, if newline is None, any '\n' characters written
             #   are translated to the system default line separator.
             # By default sys.stdout.write() expects '\n' newlines and then
             # translates them so this is still cross platform.

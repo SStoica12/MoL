@@ -277,6 +277,30 @@ conv_llava_llama_2 = Conversation(
     sep2="</s>",
 )
 
+conv_bunny = Conversation(
+    system="A chat between a curious user and an artificial intelligence assistant. "
+    "The assistant gives helpful, detailed, and polite answers to the user's questions.",
+    roles=("USER", "ASSISTANT"),
+    version="bunny",
+    messages=(),
+    offset=0,
+    sep_style=SeparatorStyle.TWO,
+    sep=" ",
+    sep2="<|endoftext|>",
+)
+
+conv_bunny_llama = Conversation(
+    system="A chat between a curious user and an artificial intelligence assistant. "
+    "The assistant gives helpful, detailed, and polite answers to the user's questions.",
+    roles=("USER", "ASSISTANT"),
+    version="llama",
+    messages=(),
+    offset=0,
+    sep_style=SeparatorStyle.TWO,
+    sep=" ",
+    sep2="<|end_of_text|>",
+)
+
 conv_mpt = Conversation(
     system="""<|im_start|>system
 A conversation between a user and an LLM-based AI assistant. The assistant gives helpful and honest answers.""",
@@ -376,6 +400,8 @@ conv_templates = {
     "v1": conv_vicuna_v1,
     "vicuna_v1": conv_vicuna_v1,
     "llama_2": conv_llama_2,
+    "llama": conv_bunny_llama,
+    "bunny": conv_bunny,
     "mistral_instruct": conv_mistral_instruct,
     "chatml_direct": conv_chatml_direct,
     "mistral_direct": conv_chatml_direct,

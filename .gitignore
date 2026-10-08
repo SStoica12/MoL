@@ -1,36 +1,27 @@
-# Python
-__pycache__
-*.pyc
-*.egg-info
-dist
-
-# Log
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+.env
+.env.*
+checkpoints/
+paper/
+playground/
+data/
+outputs/
+results/
+wandb/
+.cache/
 *.log
-*.log.*
-*.json
-*.jsonl
-
-# Data
-!**/alpaca-data-conversation.json
-
-# Editor
-.idea
-*.swp
-
-# Other
-.DS_Store
-wandb
-output
-
-checkpoints
-ckpts*
-
-.ipynb_checkpoints
+*_err.txt
+.ipynb_checkpoints/
 *.ipynb
-
-# DevContainer
-!.devcontainer/*
-
-# Demo
-serve_images/
-lmms-eval/
+.idea/
+.vscode/
+.DS_Store
+*.bin
+*.safetensors
+*.pt
+*.pth
