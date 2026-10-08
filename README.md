@@ -99,4 +99,4 @@ CharXiv reasoning needs judge grades. To enable paid API grading, set `OPENAI_AP
 }
 ```
 
-Built on [LLaVA](https://github.com/haotian-liu/LLaVA), [Bunny](https://github.com/BAAI-DCAI/Bunny), [CLIP](https://github.com/openai/CLIP), [DINOv2](https://github.com/facebookresearch/dinov2), and [SigLIP](https://github.com/google-research/big_vision). Source code uses the [Apache-2.0 license](LICENSE); datasets and pretrained weights retain their respective licenses.
+Built on [LLaVA](https://github.com/haotian-liu/LLaVA), [Bunny](https://github.com/BAAI-DCAI/Bunny), [CLIP](https://github.com/openai/CLIP), [DINOv2](https://github.com/facebookresearch/dinov2), and [SigLIP](https://github.com/google-research/big_vision). Source code uses the [Apache-2.0 license](licenses/Apache-2.0.txt); datasets and pretrained weights retain their respective licenses.

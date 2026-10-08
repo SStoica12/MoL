@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "Mixture of Layers: Dynamic Layer Routing for Visual Reasoning"
 readme = "README.md"
 requires-python = ">=3.10,<3.12"
-license = {text = "Apache-2.0"}
+license = {file = "licenses/Apache-2.0.txt"}
 dependencies = [
   "torch==2.1.2", "torchvision==0.16.2", "numpy==1.26.4",
   "transformers==4.37.2", "tokenizers==0.15.1", "sentencepiece==0.1.99",
@@ -28,6 +28,9 @@ Paper = "https://arxiv.org/abs/2610.09440"
 Homepage = "https://wjdghks950.github.io/mol.github.io/"
 Repository = "https://github.com/SStoica12/MoL"
 Models = "https://huggingface.co/wjdghks950"
+
+[tool.setuptools]
+license-files = ["licenses/*.txt"]
 
 [tool.setuptools.packages.find]
 include = ["llava*"]
