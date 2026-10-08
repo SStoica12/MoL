@@ -23,10 +23,10 @@ For evaluation only, install `'.[eval]'` and skip FlashAttention. Dependencies a
 
 | Backbone / vision encoder | Patch | Hybrid |
 | --- | --- | --- |
-| Vicuna-13B / CLIP | [Download (k=1)](https://huggingface.co/wjdghks950/vicuna_clip_patch) | [Download (k=1)](https://huggingface.co/wjdghks950/vicuna_clip_hybrid) |
-| Vicuna-13B / DINOv2 + text | [Download (k=2)](https://huggingface.co/wjdghks950/vicuna_dinov2_patch) | [Download (k=2)](https://huggingface.co/wjdghks950/vicuna_dinov2_hybrid) |
-| Llama-3-8B-Instruct / SigLIP | [Download (k=4)](https://huggingface.co/wjdghks950/llama3-8b_siglip_patch) | [Download (k=1)](https://huggingface.co/wjdghks950/llama3-8b_siglip_hybrid) |
-| Phi-1.5 / SigLIP | [Download (k=1)](https://huggingface.co/wjdghks950/phi1_5_siglip_patch) | [Download (k=2)](https://huggingface.co/wjdghks950/phi1_5_siglip_hybrid) |
+| Vicuna-13B / CLIP | [Download](https://huggingface.co/wjdghks950/vicuna_clip_patch) | [Download](https://huggingface.co/wjdghks950/vicuna_clip_hybrid) |
+| Vicuna-13B / DINOv2 + text | [Download](https://huggingface.co/wjdghks950/vicuna_dinov2_patch) | [Download](https://huggingface.co/wjdghks950/vicuna_dinov2_hybrid) |
+| Llama-3-8B-Instruct / SigLIP | [Download](https://huggingface.co/wjdghks950/llama3-8b_siglip_patch) | [Download](https://huggingface.co/wjdghks950/llama3-8b_siglip_hybrid) |
+| Phi-1.5 / SigLIP | [Download](https://huggingface.co/wjdghks950/phi1_5_siglip_patch) | [Download](https://huggingface.co/wjdghks950/phi1_5_siglip_hybrid) |
 
 ```bash
 hf download wjdghks950/vicuna_clip_hybrid \
