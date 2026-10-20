@@ -93,8 +93,8 @@ def _has_clip_like_encoder(encoder_type):
 def _dino_router_config(config):
     branch = copy.deepcopy(config)
     branch.encoder_type = "dino"
-    if _has_clip_like_encoder(config.encoder_type):
-        # Dual-encoder configs store CLIP and DINO text widths separately.
+    if hasattr(config, "dino_mm_text_hidden_size"):
+        # Older single-DINO exports also store the actual text width here.
         branch.mm_text_hidden_size = config.dino_mm_text_hidden_size
     return branch
 
@@ -120,35 +120,59 @@ def _normalise_non_lora_state_dict(state_dict):
     return state_dict
 
 
-def _load_legacy_single_router_state(model, state_dict, encoder_type):
-    router_attr = "router_dino" if "dino" in str(encoder_type) and not _has_clip_like_encoder(encoder_type) else "router_clip"
-    router = getattr(model, router_attr, None)
-    if router is None:
-        return
-
-    router_state = {}
-    prefixes = (f"{router_attr}.", "router.")
+def _router_checkpoint_state(model_path, state_dict, encoder_type):
+    """Read every router tensor, including legacy exports, without loading LM shards."""
+    from safetensors import safe_open
+    if state_dict is None:
+        index_path = os.path.join(model_path, "model.safetensors.index.json")
+        state_dict = {}
+        if os.path.isfile(index_path):
+            with open(index_path) as handle:
+                weight_map = json.load(handle)["weight_map"]
+            keys = [k for k in weight_map if k.startswith(("router.", "router_clip.", "router_dino."))]
+            for shard in sorted({weight_map[k] for k in keys}):
+                with safe_open(os.path.join(model_path, shard), framework="pt", device="cpu") as handle:
+                    for key in keys:
+                        if weight_map[key] == shard:
+                            state_dict[key] = handle.get_tensor(key)
+    legacy_branch = "router_dino" if "dino" in encoder_type and not _has_clip_like_encoder(encoder_type) else "router_clip"
+    result = {}
     for key, value in state_dict.items():
-        normalised = key
         for prefix in ("base_model.model.", "base_model.", "model."):
-            if normalised.startswith(prefix):
-                normalised = normalised[len(prefix):]
-        for prefix in prefixes:
-            if normalised.startswith(prefix):
-                router_key = normalised[len(prefix):]
-                if router_key == "weights":
-                    router_key = "_weight_fn.weights"
-                router_state[router_key] = value
-                break
+            if key.startswith(prefix):
+                key = key[len(prefix):]
+        if key.startswith("router."):
+            key = legacy_branch + key[len("router"):]
+        if not key.startswith(("router_clip.", "router_dino.")):
+            continue
+        branch, name = key.split(".", 1)
+        if name == "weights":
+            name = "_weight_fn.weights"
+        if name in ("hybrid_reserve_d_weight", "hybrid_reserve_d_bias") and value.numel() == 1:
+            value = value.reshape(())
+        if name in result.setdefault(branch, {}):
+            raise ValueError(f"Duplicate router checkpoint key: {branch}.{name}")
+        result[branch][name] = value
+    return result
 
-    if not router_state:
-        return
 
-    missing, unexpected = router.load_state_dict(router_state, strict=False)
-    if missing or unexpected:
-        rank0_print(f"⚠️  Router state loaded with missing={missing}, unexpected={unexpected}")
-    else:
-        rank0_print(f"✅ Loaded {len(router_state)} router tensors from non_lora_trainables.")
+def _router_token_count(state, branch, default):
+    weights = state.get(branch, {}).get("_weight_fn.weights")
+    return weights.shape[0] if weights is not None else default
+
+
+def _restore_router_state(model, state):
+    for branch in ("router_clip", "router_dino"):
+        router = getattr(model, branch, None)
+        if router is not None:
+            if branch not in state:
+                raise ValueError(f"Checkpoint is missing learned {branch} weights")
+            router.load_state_dict(state[branch], strict=True)
+            rank0_print(f"Restored {len(state[branch])} tensors for {branch}.")
+
+
+def _load_legacy_single_router_state(model, state_dict, encoder_type):
+    _restore_router_state(model, _router_checkpoint_state("", state_dict, encoder_type))
 
 
 #    Copyright 2023 Haotian Liu
@@ -809,6 +833,8 @@ def load_pretrained_model_router(model_path, model_base, model_name,
             vision_tower.to(device=device, dtype=torch.float16)
             image_processor_clip = vision_tower.image_processor
 
+        router_checkpoint_state = _router_checkpoint_state(model_path, non_lora_trainables, model.config.encoder_type)
+
         if "dino" in model.config.encoder_type: # initialize router_dino_weights
             image_size = dino_tower.config.image_size
             patch_size = dino_tower.config.patch_size
@@ -820,6 +846,7 @@ def load_pretrained_model_router(model_path, model_base, model_name,
                 num_image_tokens = (image_size // patch_size)**2 + 1
             else:
                 num_image_tokens = (image_size // patch_size)**2 # 257 even for dino txt, which has 4 registers
+            num_image_tokens = _router_token_count(router_checkpoint_state, "router_dino", num_image_tokens)
             router_dino_weights = torch.zeros((num_image_tokens, hidden_size)).to(dtype=dino_tower.dtype, device=dino_tower.device)
             rank0_print("\n router_dino_weights : ", router_dino_weights.shape)
             assert router_dino_weights.is_cuda
@@ -863,6 +890,7 @@ def load_pretrained_model_router(model_path, model_base, model_name,
             patch_size = vision_tower.vision_tower.config.patch_size
             hidden_size = vision_tower.vision_tower.config.hidden_size
             num_image_tokens = (image_size // patch_size)**2 # 257 even for dino txt, which has 4 registers
+            num_image_tokens = _router_token_count(router_checkpoint_state, "router_clip", num_image_tokens)
             router_clip_weights = torch.zeros((num_image_tokens, hidden_size)).to(dtype=vision_tower.dtype, device=vision_tower.device)
             assert router_clip_weights.is_cuda
 
@@ -902,67 +930,12 @@ def load_pretrained_model_router(model_path, model_base, model_name,
             model.router_clip.to(device=vision_tower.device, dtype=vision_tower.dtype)
             model.router_clip.requires_grad_(True) # we need to learn the router
 
-        if non_lora_trainables is not None:
-            _load_legacy_single_router_state(model, non_lora_trainables, model.config.encoder_type)
-
-        rank0_print("♻️  Overwriting Router weights with custom finetuned weights...")
+        _restore_router_state(model, router_checkpoint_state)
         index_path = os.path.join(model_path, "model.safetensors.index.json")
-        if not os.path.isfile(index_path):
-            rank0_print(f"⚠️  Missing {index_path}; skipping full-checkpoint router shard restore.")
-            weight_map = {}
-        else:
-            with open(index_path, "r") as f:
-                index = json.load(f)
-
-            weight_map = index["weight_map"]
-        # find router key in the big model checkpoint
-        router_keys_dino = [k for k in weight_map.keys() if "router_dino" in k.lower() and ("weight" in k.lower())]
-        router_keys_clip = [k for k in weight_map.keys() if "router_clip" in k.lower() and ("weight" in k.lower())]
-        if router_keys_dino:
-            rank0_print("router_keys_dino : ", router_keys_dino)
-            shard_file = weight_map[router_keys_dino[0]]
-            shard_path = os.path.join(model_path, shard_file)
-            rank0_print(f"\n    Loaded checkpoint path {shard_path}")
-            shard_weights = safe_load_file(shard_path)  # loads CPU tensors
-            router_state_dict_dino = {}
-            for key, value in shard_weights.items():
-                    if "router_dino" in key:
-                        key = key.replace("router_dino.", "")  # need just weights
-                        router_state_dict_dino[key] = value
-            #    strict=False is crucial because we are only loading the vision subset
-            if len(router_state_dict_dino) > 0:
-                missing, unexpected = model.router_dino.load_state_dict(router_state_dict_dino, strict=False)
-                if len(missing) != 0 or len(unexpected) != 0:
-                    rank0_print("missing: ", missing)
-                    rank0_print("unexpected: ", unexpected)
-                    import sys; sys.exit(0)
-                else:
-                    rank0_print(f"✅ Successfully restored {len(router_state_dict_dino)} custom router keys.")
-            else:
-                rank0_print("⚠️  Warning: No custom router keys found in shards.")
-
-        if router_keys_clip:
-            rank0_print("router_keys_clip : ", router_keys_clip)
-            shard_file = weight_map[router_keys_clip[0]]
-            shard_path = os.path.join(model_path, shard_file)
-            rank0_print(f"\n    Loaded checkpoint path {shard_path}")
-            shard_weights = safe_load_file(shard_path)  # loads CPU tensors
-            router_state_dict_clip = {}
-            for key, value in shard_weights.items():
-                    if "router_clip" in key:
-                        key = key.replace("router_clip.", "")  # need just weights
-                        router_state_dict_clip[key] = value
-            #    strict=False is crucial because we are only loading the vision subset
-            if len(router_state_dict_clip) > 0:
-                missing, unexpected = model.router_clip.load_state_dict(router_state_dict_clip, strict=False)
-                if len(missing) != 0 or len(unexpected) != 0:
-                    rank0_print("missing: ", missing)
-                    rank0_print("unexpected: ", unexpected)
-                    import sys; sys.exit(0)
-                else:
-                    rank0_print(f"✅ Successfully restored {len(router_state_dict_clip)} custom router keys.")
-            else:
-                rank0_print("⚠️  Warning: No custom router keys found in shards.")
+        weight_map = {}
+        if os.path.isfile(index_path):
+            with open(index_path) as handle:
+                weight_map = json.load(handle)["weight_map"]
 
         if ("clip" in encoder_type or "siglip" in encoder_type) and ("dino" in encoder_type): # we need to load in clip_dino_fusion weights as well
             fusion_module = getattr(model.get_model(), "clip_dino_fusion", None)
