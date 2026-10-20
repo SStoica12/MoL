@@ -27,6 +27,7 @@ For evaluation only, install `'.[eval]'` and skip FlashAttention. Dependencies a
 | Vicuna-13B / DINOv2 + text | [Download](https://huggingface.co/wjdghks950/vicuna_dinov2_patch) | [Download](https://huggingface.co/wjdghks950/vicuna_dinov2_hybrid) |
 | Llama-3-8B-Instruct / SigLIP | [Download](https://huggingface.co/wjdghks950/llama3-8b_siglip_patch) | [Download](https://huggingface.co/wjdghks950/llama3-8b_siglip_hybrid) |
 | Phi-1.5 / SigLIP | [Download](https://huggingface.co/wjdghks950/phi1_5_siglip_patch) | [Download](https://huggingface.co/wjdghks950/phi1_5_siglip_hybrid) |
+| Vicuna-13B / CLIP + DINOv2 + text | — | [Download](https://huggingface.co/wjdghks950/vicuna_clip_dinov2_hybrid) |
 
 ```bash
 hf download wjdghks950/vicuna_clip_hybrid \
@@ -63,7 +64,7 @@ python scripts/train.py \
   --gpus 8 --batch-size 8 --gradient-accumulation 2
 ```
 
-For another released variant, use its Hugging Face repository name as `--profile`, such as `phi1_5_siglip_patch`, and select the corresponding data. Llama-3 and Phi use LoRA instruction tuning. Additional profiles are `vicuna_clip_layer`, `vicuna_dinov2_layer`, and `vicuna_clip_dinov2_hybrid`; these have no public checkpoints. All settings are in [configs/models.json](configs/models.json).
+For another released variant, use its Hugging Face repository name as `--profile`, such as `phi1_5_siglip_patch`, and select the corresponding data. Llama-3 and Phi use LoRA instruction tuning. Use `vicuna_clip_dinov2_hybrid` for dual-encoder concatenation/upsampling. Global-layer profiles `vicuna_clip_layer` and `vicuna_dinov2_layer` have no public checkpoints. All settings are in [configs/models.json](configs/models.json).
 
 Adjust GPU count, batch size, and accumulation for your hardware. Use a fresh output directory and a MoL stage-1 directory for `--pretrain-dir` (stock LLaVA/Bunny projectors lack router weights). Add `--dry-run` to preview commands or `--help` for options.
 

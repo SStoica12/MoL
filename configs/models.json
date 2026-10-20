@@ -269,6 +269,7 @@
     "lora_enable": false,
     "finetune_lr": 2e-05,
     "pretrain_router_lr": 5e-05,
-    "runtime_supported": true
+    "runtime_supported": true,
+    "hf_repo": "wjdghks950/vicuna_clip_dinov2_hybrid"
   }
 }

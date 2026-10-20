@@ -90,6 +90,23 @@ def _has_clip_like_encoder(encoder_type):
     return "clip" in encoder_type or "siglip" in encoder_type
 
 
+def _dino_router_config(config):
+    branch = copy.deepcopy(config)
+    branch.encoder_type = "dino"
+    if _has_clip_like_encoder(config.encoder_type):
+        # Dual-encoder configs store CLIP and DINO text widths separately.
+        branch.mm_text_hidden_size = config.dino_mm_text_hidden_size
+    return branch
+
+
+def _configure_dual_router_features(model):
+    encoder = model.config.encoder_type
+    if "clip" in encoder and "dino" in encoder:
+        # Sofia's dual-CLIP path removes CLS after routing, leaving a 24x24 grid.
+        # DINO's tower already strips its CLS/register tokens.
+        model.router_clip.vision_feature_select_strategy = "patch"
+
+
 def _vision_tower_device_map(encoder_type, device_map):
     if "siglip" in str(encoder_type) and device_map == "auto":
         return None
@@ -428,8 +445,7 @@ def load_pretrained_model_router_not_fine_tuned(model_path, model_base, model_na
             patch_size = dino_tower.config.patch_size
             hidden_size = dino_tower.config.hidden_size_dino
 
-            config_dino = copy.deepcopy(model.config)
-            config_dino.encoder_type = "dino"
+            config_dino = _dino_router_config(model.config)
 
             if "patch_layer" in model_path:
                 num_image_tokens = (image_size // patch_size)**2 + 1
@@ -513,6 +529,7 @@ def load_pretrained_model_router_not_fine_tuned(model_path, model_base, model_na
                                                         confidence_gate=confidence_gate,
                                                         confidence_gate_threshold=confidence_gate_threshold,
                                                         confidence_gate_slope=confidence_gate_slope)
+            _configure_dual_router_features(model)
             model.router_clip.to(device=vision_tower.device, dtype=vision_tower.dtype)
             model.router_clip.requires_grad_(True) # we need to learn the router
 
@@ -797,8 +814,7 @@ def load_pretrained_model_router(model_path, model_base, model_name,
             patch_size = dino_tower.config.patch_size
             hidden_size = dino_tower.config.hidden_size_dino
 
-            config_dino = copy.deepcopy(model.config)
-            config_dino.encoder_type = "dino"
+            config_dino = _dino_router_config(model.config)
 
             if "patch_layer" in model_path:
                 num_image_tokens = (image_size // patch_size)**2 + 1
@@ -882,6 +898,7 @@ def load_pretrained_model_router(model_path, model_base, model_name,
                                                         confidence_gate=confidence_gate,
                                                         confidence_gate_threshold=confidence_gate_threshold,
                                                         confidence_gate_slope=confidence_gate_slope)
+            _configure_dual_router_features(model)
             model.router_clip.to(device=vision_tower.device, dtype=vision_tower.dtype)
             model.router_clip.requires_grad_(True) # we need to learn the router
 
